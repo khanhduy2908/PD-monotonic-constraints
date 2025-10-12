@@ -5,12 +5,11 @@ import streamlit as st
 @st.cache_data(show_spinner=False)
 def load_master_data() -> pd.DataFrame:
     """
-    Load the default master dataset from the data/ folder.
-    Priority: Excel > CSV.
-    Raises clear errors for missing/empty files.
+    Load default dataset from data/ (Excel preferred; fallback to CSV).
+    Raises explicit errors for missing/empty files.
     """
     xlsx_path = os.path.join("bctc_final.xlsx")
-    csv_path = os.path.join("bctc_final.csv")
+    csv_path  = os.path.join("bctc_final.csv")
 
     if os.path.exists(xlsx_path):
         if os.path.getsize(xlsx_path) == 0:
@@ -26,7 +25,8 @@ def load_master_data() -> pd.DataFrame:
         "Could not find dataset in data/. Please add bctc_final.xlsx or bctc_final.csv to the repository."
     )
 
-def require_columns(df: pd.DataFrame, cols: list):
-    missing = [c for c in cols if c not in df.columns]
-    if missing:
-        raise ValueError(f"Dataset is missing required columns: {missing}")
+def filter_by_ticker_period(df: pd.DataFrame, ticker: str, start_year: int, end_year: int) -> pd.DataFrame:
+    df2 = df.copy()
+    df2["Ticker"] = df2["Ticker"].astype(str).str.upper()
+    out = df2[(df2["Ticker"] == str(ticker).upper()) & (df2["Year"].astype(int).between(int(start_year), int(end_year)))]
+    return out
