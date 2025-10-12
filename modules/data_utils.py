@@ -1,6 +1,7 @@
 import os
 import pandas as pd
 import streamlit as st
+from itertools import combinations
 
 @st.cache_data(show_spinner=False)
 def load_master_data() -> pd.DataFrame:
@@ -22,3 +23,11 @@ def filter_by_ticker_period(df: pd.DataFrame, ticker: str, start_year: int, end_
     df2["Ticker"] = df2["Ticker"].astype(str).str.upper()
     mask = (df2["Ticker"] == str(ticker).upper()) & (df2["Year"].astype(int).between(int(start_year), int(end_year)))
     return df2.loc[mask].copy()
+
+def generate_interactions(df: pd.DataFrame, features: list) -> pd.DataFrame:
+    df = df.copy()
+    for f1, f2 in combinations(features, 2):
+        col_name = f"{f1}_x_{f2}"
+        if col_name not in df.columns:
+            df[col_name] = df[f1] * df[f2]
+    return df
