@@ -1,13 +1,16 @@
-import streamlit as st
 import pandas as pd
+import streamlit as st
+import os
 
 @st.cache_data(show_spinner=False)
-def load_master_data(path: str = "data/bctc_final.xlsx") -> pd.DataFrame:
-    if path.endswith(".csv"):
-        df = pd.read_csv(path)
+def load_master_data(path_xlsx="data/bctc_final.xlsx", path_csv="data/bctc_final.csv") -> pd.DataFrame:
+    # Ưu tiên xlsx, fallback sang csv
+    if os.path.exists(path_xlsx):
+        return pd.read_excel(path_xlsx)
+    elif os.path.exists(path_csv):
+        return pd.read_csv(path_csv)
     else:
-        df = pd.read_excel(path)
-    return df
+        raise FileNotFoundError(f"Không tìm thấy file dữ liệu tại {path_xlsx} hoặc {path_csv}")
 
 
 def list_tickers(df: pd.DataFrame):
