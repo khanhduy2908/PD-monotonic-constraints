@@ -3,8 +3,12 @@ import pandas as pd
 
 @st.cache_data(show_spinner=False)
 def load_master_data(path: str = "data/bctc_final.xlsx") -> pd.DataFrame:
-    df = pd.read_excel(path)
+    if path.endswith(".csv"):
+        df = pd.read_csv(path)
+    else:
+        df = pd.read_excel(path)
     return df
+
 
 def list_tickers(df: pd.DataFrame):
     return sorted(df["Ticker"].dropna().astype(str).unique())
