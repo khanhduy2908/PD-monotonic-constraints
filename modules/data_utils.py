@@ -7,7 +7,7 @@ from pathlib import Path
 # 1. Load master data
 # ==========================
 @st.cache_data
-def load_master_data(csv_path: str = "/data/bctc_final.csv") -> pd.DataFrame:
+def load_master_data(csv_path: str = "bctc_final.csv") -> pd.DataFrame:
     if not Path(csv_path).exists():
         st.warning(f"Dataset not found at {csv_path}")
         return pd.DataFrame()
