@@ -1,7 +1,7 @@
 from modules.data_utils import load_master_data
 
 def render(state):
-    app_header("📦 Data Ingestion", "Upload & validate your master dataset")
+    app_header("Data Ingestion", "Upload & validate your master dataset")
     with st.container(border=True):
         st.write("Ứng dụng sẽ nạp dữ liệu mặc định từ **data/bctc_final.xlsx**. "
                  "Bạn có thể tải file mới để tạm thời thay thế (không ghi đè lên ổ đĩa).")
