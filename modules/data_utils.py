@@ -5,8 +5,8 @@ import streamlit as st
 @st.cache_data(show_spinner=False)
 def load_master_data() -> pd.DataFrame:
     """Load dataset from /data. Prefer XLSX, fallback to CSV."""
-    xlsx = os.path.join("data", "bctc_final.xlsx")
-    csv  = os.path.join("data", "bctc_final.csv")
+    xlsx = os.path.join("bctc_final.xlsx")
+    csv  = os.path.join("bctc_final.csv")
     if os.path.exists(xlsx):
         if os.path.getsize(xlsx) == 0:
             raise pd.errors.EmptyDataError("Excel file exists but is empty.")
