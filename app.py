@@ -39,6 +39,7 @@ st.markdown(
 # ---------------- Load data ----------------
 try:
     df_master = load_master_data()
+    df_master = preprocess_and_create_features(df_master)
 except FileNotFoundError as e:
     st.error(str(e)); st.stop()
 except pd.errors.EmptyDataError:
