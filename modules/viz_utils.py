@@ -18,14 +18,31 @@ def plot_default_distribution_year(df: pd.DataFrame):
 def plot_default_rate_by_sector(df: pd.DataFrame):
     if "Default" not in df.columns or "Sector" not in df.columns or len(df) == 0:
         return go.Figure()
+
     summary = df.groupby(["Sector", "Default"]).size().unstack(fill_value=0)
+
+    # Đảm bảo có đủ 2 cột: 0 & 1
+    if 0 not in summary.columns:
+        summary[0] = 0
+    if 1 not in summary.columns:
+        summary[1] = 0
+
+    # Sắp xếp lại thứ tự cột
+    summary = summary[[0, 1]]
     summary.columns = ["No Default", "Default"]
+
     summary["Total"] = summary.sum(axis=1)
     summary["Default Rate (%)"] = (summary["Default"] / summary["Total"] * 100).round(2)
     summary = summary.reset_index().sort_values("Default Rate (%)", ascending=False)
-    fig = px.bar(summary, x="Sector", y="Default Rate (%)",
-                 color="Default Rate (%)", template="plotly_white",
-                 title="Default Rate by Sector (Selected Subset)")
+
+    fig = px.bar(
+        summary,
+        x="Sector",
+        y="Default Rate (%)",
+        color="Default Rate (%)",
+        template="plotly_white",
+        title="Default Rate by Sector (Selected Subset)",
+    )
     fig.update_layout(xaxis_tickangle=-40, coloraxis_showscale=False)
     return fig
 
