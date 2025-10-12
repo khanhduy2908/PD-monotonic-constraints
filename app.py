@@ -21,6 +21,7 @@ from modules.viz_utils import (
     plot_pd_line_forecast,
     plot_pd_risk_bucket_bar,
 )
+from modules.feature_engineering import preprocess_and_create_features
 
 # ---------------- Page config ----------------
 st.set_page_config(
