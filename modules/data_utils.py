@@ -9,8 +9,8 @@ def load_master_data() -> pd.DataFrame:
     Priority: Excel > CSV.
     Raises clear errors for missing/empty files.
     """
-    xlsx_path = os.path.join("data", "bctc_final.xlsx")
-    csv_path = os.path.join("data", "bctc_final.csv")
+    xlsx_path = os.path.join("bctc_final.xlsx")
+    csv_path = os.path.join("bctc_final.csv")
 
     if os.path.exists(xlsx_path):
         if os.path.getsize(xlsx_path) == 0:
