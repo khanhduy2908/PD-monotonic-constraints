@@ -4,11 +4,11 @@ from modules.data_utils import load_master_data
 
 # Lazy import for blocks
 PAGES = {
-    "📦 Data Ingestion": "blocks.1_📦_Data_Ingestion",
-    "🧮 Features & Interactions": "blocks.2_🧮_Features_&_Interactions",
-    "⚡ Scoring": "blocks.3_⚡_Scoring",
-    "📈 Evaluation Dashboard": "blocks.4_📈_Evaluation_Dashboard",
-    "🛠️ Admin & Registry": "blocks.5_🛠️_Admin_Registry",
+    "Data Ingestion": "blocks.1_Data_Ingestion",
+    "Features & Interactions": "blocks.2_Features_&_Interactions",
+    "Scoring": "blocks.3_Scoring",
+    "Evaluation Dashboard": "blocks.4_Evaluation_Dashboard",
+    "Admin & Registry": "blocks.5_Admin_Registry",
 }
 
 st.set_page_config(page_title="Risk App — Default Prediction", layout="wide")
