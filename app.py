@@ -1,36 +1,60 @@
 import streamlit as st
-from modules.ui_components import app_header
+import pandas as pd
 from modules.data_utils import load_master_data
+from modules.model_utils import load_model_and_assets, predict_proba_single
+from modules.viz_utils import plot_roc_auc_plotly, plot_precision_recall_plotly
 
-# Lazy import for blocks
-PAGES = {
-    "Data Ingestion": "blocks.1_Data_Ingestion",
-    "Features & Interactions": "blocks.2_Features_&_Interactions",
-    "Scoring": "blocks.3_Scoring",
-    "Evaluation Dashboard": "blocks.4_Evaluation_Dashboard",
-    "Admin & Registry": "blocks.5_Admin_Registry",
-}
+st.set_page_config(
+    page_title="Corporate Default Risk Dashboard",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
 
-st.set_page_config(page_title="Risk App — Default Prediction", layout="wide")
+# ===== HEADER =====
+st.title("Corporate Default Risk Scoring System")
+st.markdown("""
+This internal tool provides real-time corporate default risk scoring using a pre-trained LightGBM model. 
+It is designed for financial institutions to assess firm-level probability of default.
+""")
 
-# Shared state
-if "state" not in st.session_state:
-    st.session_state["state"] = {}
-state = st.session_state["state"]
+# ===== DATA SECTION =====
+st.subheader("Master Dataset")
+try:
+    df_master = load_master_data()
+    st.dataframe(df_master.head(50), use_container_width=True)
+    st.caption(f"Dataset loaded successfully: {df_master.shape[0]} rows × {df_master.shape[1]} columns")
+except FileNotFoundError as e:
+    st.error(str(e))
+    st.stop()
 
-with st.sidebar:
-    st.image("https://static.streamlit.io/examples/dice.jpg", width=96)
-    st.markdown("## Navigation")
-    choice = st.radio("Go to", list(PAGES.keys()), index=0)
+# ===== MODEL SECTION =====
+st.subheader("Scoring Interface")
 
-# Ensure default data loaded once
-if "df_master" not in state:
-    try:
-        state["df_master"] = load_master_data()
-    except Exception:
-        state["df_master"] = None
+model, scaler, feature_list, threshold = load_model_and_assets()
 
-# Dynamic loader
-module_path = PAGES[choice]
-mod = __import__(module_path, fromlist=["render"])
-mod.render(state)
+col1, col2 = st.columns([1, 2])
+
+with col1:
+    firm_code = st.text_input("Enter Firm Code (e.g. ABC123)")
+    score_btn = st.button("Run Scoring")
+
+with col2:
+    if score_btn:
+        if firm_code not in df_master['firm_code'].values:
+            st.error("Firm code not found in dataset.")
+        else:
+            x_input = df_master[df_master['firm_code'] == firm_code][feature_list]
+            proba, label = predict_proba_single(model, scaler, x_input, threshold)
+            st.metric("Default Probability", f"{proba:.2%}")
+            st.metric("Predicted Class", "Default" if label == 1 else "Non-Default")
+
+# ===== EVALUATION SECTION =====
+st.subheader("Model Evaluation Dashboard")
+
+col_a, col_b = st.columns(2)
+with col_a:
+    st.plotly_chart(plot_roc_auc_plotly(model, df_master[feature_list], df_master['default']), use_container_width=True)
+with col_b:
+    st.plotly_chart(plot_precision_recall_plotly(model, df_master[feature_list], df_master['default']), use_container_width=True)
+
+st.caption("Evaluation charts are based on the full dataset and pre-trained model.")
