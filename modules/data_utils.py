@@ -13,19 +13,6 @@ def load_master_data() -> pd.DataFrame:
         return pd.read_csv(csv_path)
     else:
         raise FileNotFoundError(
-            f"❌ Không tìm thấy file dữ liệu tại {xlsx_path} hoặc {csv_path}. "
-            f"Vui lòng kiểm tra lại repo."
+            f"Could not find dataset at {xlsx_path} or {csv_path}. "
+            "Please make sure the file exists in the repository."
         )
-
-def list_tickers(df: pd.DataFrame):
-    return sorted(df["Ticker"].dropna().astype(str).unique())
-
-def get_record_by_ticker_year(df: pd.DataFrame, ticker: str, year: int) -> pd.DataFrame:
-    sub = df[(df["Ticker"].astype(str).str.upper() == str(ticker).upper()) & (df["Year"] == int(year))]
-    return sub
-
-def has_labels(df: pd.DataFrame) -> bool:
-    return "Default" in df.columns
-
-def safe_to_csv_download(df: pd.DataFrame) -> bytes:
-    return df.to_csv(index=False).encode("utf-8")
