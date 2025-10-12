@@ -1,6 +1,6 @@
 import pandas as pd
-import streamlit as st
 import os
+import streamlit as st
 
 @st.cache_data(show_spinner=False)
 def load_master_data() -> pd.DataFrame:
@@ -13,8 +13,8 @@ def load_master_data() -> pd.DataFrame:
         return pd.read_csv(csv_path)
     else:
         raise FileNotFoundError(
-            "❌ Không tìm thấy file dữ liệu mặc định (data/bctc_final.xlsx hoặc data/bctc_final.csv). "
-            "Vui lòng kiểm tra lại repo."
+            f"❌ Không tìm thấy file dữ liệu tại {xlsx_path} hoặc {csv_path}. "
+            f"Vui lòng kiểm tra lại repo."
         )
 
 def list_tickers(df: pd.DataFrame):
