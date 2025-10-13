@@ -423,28 +423,19 @@ if shap_df.empty:
 else:
     st.dataframe(shap_df, use_container_width=True, hide_index=True)
 
-# ===================== D) Stress Testing (factor-level) =====================
+# ===================== D) Stress Testing (Factor-level, sector & systemic) =====================
 st.subheader("D. Stress Testing")
 
-# ===================== D) Stress Testing (Sector- & System-level, realistic) =====================
-st.subheader("D. Stress Testing")
+# Remove the severity and Monte Carlo slider options for more direct control over scenarios
+# Direct control over severity (since settings are removed)
+severity_label = "Moderate"  # Default severity for all scenarios
+exch_intensity = EXCHANGE_INTENSITY.get(exchange, 1.0)  # Set exchange intensity based on selected exchange
+sim_count = 5000  # Default Monte Carlo sims (you can adjust this)
 
-# ---------- Controls: severity & selection ----------
-with st.expander("Stress test settings", expanded=True):
-    c1, c2, c3 = st.columns([1,1,1])
-    with c1:
-        severity_label = st.select_slider("Severity", options=["Mild","Moderate","Severe"], value="Moderate")
-    with c2:
-        # exchange intensity (defined earlier) scales the shock; already computed as ex_intensity
-        st.write(f"**Exchange intensity**: {exchange or '-'} → ×{ex_intensity:.2f}")
-    with c3:
-        sim_count = st.number_input("Monte Carlo sims", min_value=1000, max_value=20000, value=5000, step=1000)
-
-# Helper to scale multipliers by severity & exchange intensity
-def _scale_multiplier(m: float, sev: float, exch_int: float) -> float:
+# Helper function to scale multipliers by severity & exchange intensity
+def scale_multiplier(m: float, sev: float, exch_int: float) -> float:
     """
-    If m<1 (down shock), bring it further down with severity*exch_int; if m>1 (up shock), push further up.
-    Linear scaling around 1.0: scaled = 1 + (m-1)*sev*exch_int
+    Apply severity and exchange intensity multipliers to the given shock factor.
     """
     return 1.0 + (float(m) - 1.0) * float(sev) * float(exch_int)
 
@@ -466,243 +457,117 @@ def score_pd(model, Xrow: pd.DataFrame) -> float:
     return float(model.predict(Xrow)[0])
 
 # ---------- Canonical scenario building blocks ----------
-# We keep to widely used, model-facing features you already engineered. If a feature isn't present,
-# it is simply skipped (no error), so this works across all sectors and models.
+# Adjusted scenarios for realistic and distinct impact
 SCENARIO_BLOCKS = {
-    # Demand/covid-like collapse
     "Pandemic/Demand Shock": {
+        "Revenue_CAGR_3Y": 0.70,
+        "Asset_Turnover": 0.80,
+        "Receivables_Turnover": 0.85,
+        "Net_Profit_Margin": 0.75,
+        "ROA": 0.70,
+        "ROE": 0.72,
+        "Interest_Coverage": 0.60,
+        "EBITDA_to_Interest": 0.70,
+        "Current_Ratio": 0.85,
+        "Quick_Ratio": 0.85,
+        "Debt_to_Assets": 1.05,
+        "Debt_to_Equity": 1.10,
+        "Sentiment Score": 0.80,
+        "Negative Ratio": 1.20,
+        "News Shock": 1.30
+    },
+    "Tech Crunch": {
         "Revenue_CAGR_3Y": 0.80,
-        "Asset_Turnover": 0.88,
-        "Receivables_Turnover": 0.90,
-        "Gross_Margin": 0.92,
-        "Net_Profit_Margin": 0.85,
-        "ROA": 0.82,
-        "ROE": 0.82,
+        "Gross_Margin": 0.85,
+        "Net_Profit_Margin": 0.80,
+        "ROA": 0.80,
+        "ROE": 0.80,
         "Interest_Coverage": 0.70,
         "EBITDA_to_Interest": 0.75,
-        "Current_Ratio": 0.92,
-        "Quick_Ratio": 0.92,
-        "Debt_to_Assets": 1.05,
-        "Debt_to_Equity": 1.08,
+        "Debt_to_Equity": 1.05,
         "Sentiment Score": 0.85,
-        "Negative Ratio": 1.10,
-        "News Shock": 1.20
-    },
-    # Tech crunch / funding winter
-    "Tech Crunch": {
-        "Revenue_CAGR_3Y": 0.82,
-        "Gross_Margin": 0.94,
-        "Net_Profit_Margin": 0.88,
-        "ROA": 0.88,
-        "ROE": 0.88,
-        "Interest_Coverage": 0.85,
-        "EBITDA_to_Interest": 0.90,
-        "Debt_to_Equity": 1.10,
-        "Sentiment Score": 0.88,
-        "Negative Ratio": 1.12,
+        "Negative Ratio": 1.15,
         "News Shock": 1.10
     },
-    # Tariff/trade war shock (exporters, industrials, materials)
     "Tariff & Trade War": {
         "Revenue_CAGR_3Y": 0.85,
-        "Asset_Turnover": 0.92,
-        "Receivables_Turnover": 0.90,
-        "Gross_Margin": 0.90,
-        "Net_Profit_Margin": 0.90,
-        "ROA": 0.90,
-        "Debt_to_Assets": 1.05,
-        "Debt_to_Equity": 1.08,
-        "Interest_Coverage": 0.88,
-        "Sentiment Score": 0.90,
-        "Negative Ratio": 1.08
+        "Asset_Turnover": 0.90,
+        "Receivables_Turnover": 0.85,
+        "Net_Profit_Margin": 0.80,
+        "ROA": 0.80,
+        "ROE": 0.80,
+        "Interest_Coverage": 0.75,
+        "EBITDA_to_Interest": 0.80,
+        "Sentiment Score": 0.75,
+        "Negative Ratio": 1.10
     },
-    # Supply chain disruption (logistics, retail, consumer goods, industrials)
     "Supply Chain Disruption": {
-        "Asset_Turnover": 0.88,
-        "Receivables_Turnover": 0.88,
-        "Gross_Margin": 0.93,
-        "Current_Ratio": 0.95,
-        "Quick_Ratio": 0.93,
-        "ROA": 0.92,
-        "Interest_Coverage": 0.90,
-        "Sentiment Score": 0.92,
+        "Asset_Turnover": 0.85,
+        "Receivables_Turnover": 0.90,
+        "Net_Profit_Margin": 0.80,
+        "ROA": 0.85,
+        "Interest_Coverage": 0.80,
+        "Sentiment Score": 0.90,
         "Negative Ratio": 1.05
     },
-    # Commodity price shock (upside for producers, downside for consumers)
     "Commodity Price Spike": {
-        # baseline assumes cost pressure → margin squeeze for most non-energy sectors
         "Gross_Margin": 0.90,
-        "Net_Profit_Margin": 0.90,
-        "ROA": 0.92,
-        "Interest_Coverage": 0.90,
-        "EBITDA_to_Interest": 0.92,
-        "Sentiment Score": 0.94
-    },
-    # Housing/real-estate downturn
-    "Housing Downturn": {
-        "Revenue_CAGR_3Y": 0.80,
-        "Gross_Margin": 0.88,
         "Net_Profit_Margin": 0.85,
         "ROA": 0.80,
-        "Interest_Coverage": 0.80,
-        "EBITDA_to_Interest": 0.85,
+        "Interest_Coverage": 0.75,
+        "EBITDA_to_Interest": 0.80,
+        "Sentiment Score": 0.80
+    },
+    "Housing Downturn": {
+        "Revenue_CAGR_3Y": 0.70,
+        "Gross_Margin": 0.75,
+        "Net_Profit_Margin": 0.70,
+        "ROA": 0.70,
+        "Interest_Coverage": 0.70,
+        "EBITDA_to_Interest": 0.70,
         "Debt_to_Assets": 1.10,
-        "Debt_to_Equity": 1.12,
-        "Sentiment Score": 0.88,
-        "Negative Ratio": 1.12
+        "Debt_to_Equity": 1.15,
+        "Sentiment Score": 0.75,
+        "Negative Ratio": 1.20
     },
 }
 
-# Systemic (macro-wide) shocks
+# ---------- Systemic (macro-wide) shocks ----------
 SYSTEMIC_BLOCKS = {
     "Interest Rate +300bps": {
-        "Interest_Coverage": 0.75,
-        "EBITDA_to_Interest": 0.80,
-        "Operating_Income_to_Debt": 0.85,
+        "Interest_Coverage": 0.60,
+        "EBITDA_to_Interest": 0.65,
+        "Operating_Income_to_Debt": 0.75,
         "Debt_to_Equity": 1.10,
-        "ROA": 0.95,
-        "ROE": 0.95,
+        "ROA": 0.85,
+        "ROE": 0.85,
     },
     "Liquidity Crunch": {
-        "Current_Ratio": 0.85,
-        "Quick_Ratio": 0.82,
-        "Interest_Coverage": 0.85,
-        "Debt_to_Assets": 1.08,
-        "Debt_to_Equity": 1.12
+        "Current_Ratio": 0.75,
+        "Quick_Ratio": 0.70,
+        "Interest_Coverage": 0.75,
+        "Debt_to_Assets": 1.10,
+        "Debt_to_Equity": 1.15
     },
     "Market Risk-Off": {
-        "Sentiment Score": 0.85,
-        "Negative Ratio": 1.15,
-        "News Shock": 1.20,
-        "ROA": 0.95,
-        "ROE": 0.95
+        "Sentiment Score": 0.60,
+        "Negative Ratio": 1.20,
+        "News Shock": 1.30,
+        "ROA": 0.75,
+        "ROE": 0.75
     }
 }
 
-# ---------- Sector→scenario routing (covers all sectors in your file) ----------
-# We route dataset sectors to relevant blocks, with tailored overrides per sector.
-def _sector_key(s: str) -> str:
-    s = (s or "").lower()
-    if any(k in s for k in ["bank"]): return "Banks"
-    if any(k in s for k in ["securit", "broker"]): return "Securities"
-    if any(k in s for k in ["insur"]): return "Insurance"
-    if any(k in s for k in ["real estate", "property", "construction"]): return "Real Estate"
-    if any(k in s for k in ["construct", "material", "cement", "steel", "metal", "basic res"]): return "Construction & Materials"
-    if any(k in s for k in ["industrial", "manufacturing", "machinery", "logistic"]): return "Industrials"
-    if any(k in s for k in ["personal & household", "retail", "discretionary"]): return "Consumer Discretionary"
-    if any(k in s for k in ["food", "beverage", "staple"]): return "Consumer Staples"
-    if any(k in s for k in ["energy", "oil", "gas", "coal"]): return "Energy"
-    if any(k in s for k in ["utilit"]): return "Utilities"
-    if any(k in s for k in ["health", "pharma", "medical"]): return "Health Care"
-    if any(k in s for k in ["tech", "software", "it", "information"]): return "Technology"
-    if any(k in s for k in ["tele", "communication"]): return "Telecom"
-    if any(k in s for k in ["auto", "automobile", "parts"]): return "Automobiles"
-    if any(k in s for k in ["media", "entertainment"]): return "Media"
-    if any(k in s for k in ["travel", "leisure", "tourism", "hotel", "airline"]): return "Travel & Leisure"
-    return "Generic"
-
+# ---------- Sector → Scenario Routing ----------
 def build_sector_scenarios(sector_name: str) -> dict:
     key = _sector_key(sector_name)
     sc = {}
 
-    # Base routing per canonical sector
     if key == "Banks":
         sc = {
-            "Credit Loss Surge": {
-                "ROE": 0.88, "ROA": 0.90, "Net_Profit_Margin": 0.90,
-                "Interest_Coverage": 0.85, "Operating_Income_to_Debt": 0.88,
-                "Debt_to_Equity": 1.10, "Sentiment Score": 0.90, "Negative Ratio": 1.10
-            },
-            "Funding Cost Spike (IR +300bps)": SYSTEMIC_BLOCKS["Interest Rate +300bps"],
-            "Liquidity Drain": SYSTEMIC_BLOCKS["Liquidity Crunch"]
-        }
-    elif key == "Securities":
-        sc = {
-            "Market Turnover Slump": {
-                "Revenue_CAGR_3Y": 0.82, "Net_Profit_Margin": 0.88,
-                "ROE": 0.88, "ROA": 0.90, "Sentiment Score": 0.88, "Negative Ratio": 1.12
-            },
-            "Risk-Off Sentiment": SYSTEMIC_BLOCKS["Market Risk-Off"],
-            "Funding Cost Spike (IR +300bps)": SYSTEMIC_BLOCKS["Interest Rate +300bps"]
-        }
-    elif key == "Insurance":
-        sc = {
-            "Claim Ratio Spike": {
-                "Net_Profit_Margin": 0.85, "ROE": 0.88, "ROA": 0.90,
-                "Interest_Coverage": 0.90, "Debt_to_Equity": 1.05, "Sentiment Score": 0.92
-            },
-            "Risk-Off Sentiment": SYSTEMIC_BLOCKS["Market Risk-Off"]
-        }
-    elif key == "Real Estate":
-        sc = {
-            "Housing Downturn": SCENARIO_BLOCKS["Housing Downturn"],
-            "Credit Tightening": SYSTEMIC_BLOCKS["Liquidity Crunch"],
-            "Sales Slowdown": {
-                "Revenue_CAGR_3Y": 0.85, "Gross_Margin": 0.92, "ROA": 0.88,
-                "Interest_Coverage": 0.88, "Debt_to_Assets": 1.08, "Debt_to_Equity": 1.10
-            }
-        }
-    elif key == "Construction & Materials":
-        sc = {
-            "Tariff & Trade War": SCENARIO_BLOCKS["Tariff & Trade War"],
-            "Commodity Price Spike": SCENARIO_BLOCKS["Commodity Price Spike"],
-            "Supply Chain Disruption": SCENARIO_BLOCKS["Supply Chain Disruption"]
-        }
-    elif key == "Industrials":
-        sc = {
-            "Supply Chain Disruption": SCENARIO_BLOCKS["Supply Chain Disruption"],
-            "Tariff & Trade War": SCENARIO_BLOCKS["Tariff & Trade War"],
-            "Demand Slowdown": {
-                "Revenue_CAGR_3Y": 0.88, "Asset_Turnover": 0.92,
-                "ROA": 0.90, "Interest_Coverage": 0.88, "Net_Profit_Margin": 0.90
-            }
-        }
-    elif key == "Consumer Discretionary":
-        sc = {
-            "Pandemic/Demand Shock": SCENARIO_BLOCKS["Pandemic/Demand Shock"],
-            "Supply Chain Disruption": SCENARIO_BLOCKS["Supply Chain Disruption"],
-            "Market Risk-Off": SYSTEMIC_BLOCKS["Market Risk-Off"]
-        }
-    elif key == "Consumer Staples":
-        sc = {
-            "Commodity Price Spike": SCENARIO_BLOCKS["Commodity Price Spike"],
-            "Supply Chain Disruption": SCENARIO_BLOCKS["Supply Chain Disruption"],
-            "Demand Soft Patch": {
-                "Revenue_CAGR_3Y": 0.92, "Gross_Margin": 0.95,
-                "ROA": 0.94, "Interest_Coverage": 0.92
-            }
-        }
-    elif key == "Energy":
-        # For producers, commodity spike can be positive on revenue but may compress/expand margins differently.
-        sc = {
-            "Oil Price Drop": {
-                "Revenue_CAGR_3Y": 0.80, "Gross_Margin": 0.88, "Net_Profit_Margin": 0.88,
-                "ROA": 0.88, "Interest_Coverage": 0.85, "EBITDA_to_Interest": 0.88,
-                "Sentiment Score": 0.88, "Negative Ratio": 1.12
-            },
-            "Oil Price Spike": {
-                "Revenue_CAGR_3Y": 1.10, "ROA": 1.05, "EBITDA_to_Interest": 1.05,
-                # keep leverage ratios roughly unchanged; uncertainty on net margin handled by model
-            },
-            "Policy/Tax Shift": {
-                "ROA": 0.92, "Net_Profit_Margin": 0.92, "Interest_Coverage": 0.90
-            }
-        }
-    elif key == "Utilities":
-        sc = {
-            "Tariff Freeze (Regulatory)": {
-                "Revenue_CAGR_3Y": 0.92, "ROA": 0.95, "ROE": 0.95,
-                "Interest_Coverage": 0.95
-            },
-            "Rate Hike (IR +300bps)": SYSTEMIC_BLOCKS["Interest Rate +300bps"]
-        }
-    elif key == "Health Care":
-        sc = {
-            "Reimbursement Pressure": {
-                "Gross_Margin": 0.92, "Net_Profit_Margin": 0.90,
-                "ROA": 0.92, "Interest_Coverage": 0.92
-            },
-            "Pandemic/Demand Shock": SCENARIO_BLOCKS["Pandemic/Demand Shock"]
+            "Credit Loss Surge": SCENARIO_BLOCKS["Pandemic/Demand Shock"],
+            "Interest Rate Hike": SYSTEMIC_BLOCKS["Interest Rate +300bps"],
+            "Liquidity Crisis": SYSTEMIC_BLOCKS["Liquidity Crunch"]
         }
     elif key == "Technology":
         sc = {
@@ -710,144 +575,72 @@ def build_sector_scenarios(sector_name: str) -> dict:
             "Supply Chain Disruption": SCENARIO_BLOCKS["Supply Chain Disruption"],
             "Market Risk-Off": SYSTEMIC_BLOCKS["Market Risk-Off"]
         }
-    elif key == "Telecom":
+    elif key == "Real Estate":
         sc = {
-            "ARPU Pressure": {
-                "Revenue_CAGR_3Y": 0.92, "Gross_Margin": 0.94,
-                "ROA": 0.94, "ROE": 0.94
-            },
-            "Rate Hike (IR +300bps)": SYSTEMIC_BLOCKS["Interest Rate +300bps"]
+            "Housing Downturn": SCENARIO_BLOCKS["Housing Downturn"],
+            "Credit Tightening": SYSTEMIC_BLOCKS["Liquidity Crunch"]
         }
-    elif key == "Automobiles":
-        sc = {
-            "Supply Chain Disruption": SCENARIO_BLOCKS["Supply Chain Disruption"],
-            "Tariff & Trade War": SCENARIO_BLOCKS["Tariff & Trade War"],
-            "Demand Shock": {
-                "Revenue_CAGR_3Y": 0.85, "Gross_Margin": 0.90,
-                "ROA": 0.88, "Interest_Coverage": 0.88, "Debt_to_Equity": 1.08
-            }
-        }
-    elif key == "Media":
-        sc = {
-            "Ad Spend Pullback": {
-                "Revenue_CAGR_3Y": 0.85, "Gross_Margin": 0.92,
-                "Net_Profit_Margin": 0.90, "ROA": 0.92, "ROE": 0.92
-            },
-            "Market Risk-Off": SYSTEMIC_BLOCKS["Market Risk-Off"]
-        }
-    elif key == "Travel & Leisure":
-        sc = {
-            "Pandemic/Demand Shock": SCENARIO_BLOCKS["Pandemic/Demand Shock"],
-            "Fuel Cost Spike": {
-                "Gross_Margin": 0.88, "Net_Profit_Margin": 0.88,
-                "ROA": 0.90, "Interest_Coverage": 0.85
-            },
-            "Rate Hike (IR +300bps)": SYSTEMIC_BLOCKS["Interest Rate +300bps"]
-        }
-    else:  # Generic fallback for any unseen sector names
-        sc = {
-            "Demand Shock": SCENARIO_BLOCKS["Pandemic/Demand Shock"],
-            "Supply Chain Disruption": SCENARIO_BLOCKS["Supply Chain Disruption"],
-            "Rate Hike (IR +300bps)": SYSTEMIC_BLOCKS["Interest Rate +300bps"]
-        }
-
-    # Special tweaks: if the sector looks like personal & household goods (consumer discretionary)
-    if "personal & household" in (sector_name or "").lower():
-        sc["Consumer Confidence Drop"] = {
-            "Revenue_CAGR_3Y": 0.85, "Gross_Margin": 0.92, "ROA": 0.90,
-            "Interest_Coverage": 0.90, "Sentiment Score": 0.88, "Negative Ratio": 1.10
-        }
+    # Add more industry-specific mappings here
+    else:
+        sc = SCENARIO_BLOCKS  # Fallback to general scenarios if sector is unknown
 
     return sc
 
-# ---------- Build scenarios for the selected company sector ----------
-sector_scenarios_raw = build_sector_scenarios(sector_raw)
-systemic_scenarios_raw = SYSTEMIC_BLOCKS
-
-# Scale multipliers by severity & exchange intensity
-def scale_block(block: dict, sev: float, ex_int: float) -> dict:
-    return {k: _scale_multiplier(v, sev, ex_int) for k, v in block.items()}
-
-sector_scenarios = {name: scale_block(m, sev, ex_intensity) for name, m in sector_scenarios_raw.items()}
-systemic_scenarios = {name: scale_block(m, sev, ex_intensity) for name, m in systemic_scenarios_raw.items()}
-
-# ---------- Run scenarios ----------
+# Run stress scenarios
 def run_scenarios(model, X_base: pd.DataFrame, scenarios: dict) -> pd.DataFrame:
     rows = []
     for name, mults in scenarios.items():
         Xs = apply_multipliers_once(X_base, mults)
         pd_val = score_pd(model, Xs)
         rows.append({"Scenario": name, "PD": pd_val})
-    out = pd.DataFrame(rows).sort_values("PD", ascending=False)
-    return out
+    return pd.DataFrame(rows).sort_values("PD", ascending=False)
 
-# Ensure we have a valid 1xN row aligned to model
+# ---------- Running Sector & Systemic Scenarios ----------
+sector_scenarios_raw = build_sector_scenarios(sector_raw)
+systemic_scenarios_raw = SYSTEMIC_BLOCKS
+
+# Scaling the shock values based on severity and exchange intensity
+sector_scenarios = {name: scale_multiplier(m, sev, exch_intensity) for name, m in sector_scenarios_raw.items()}
+systemic_scenarios = {name: scale_multiplier(m, sev, exch_intensity) for name, m in systemic_scenarios_raw.items()}
+
+# Ensure we have valid data for feature columns
 X_base_row = align_features_to_model(X_base.copy(), model)
 
+# Run the scenarios
 df_sector = run_scenarios(model, X_base_row, sector_scenarios)
 df_sys = run_scenarios(model, X_base_row, systemic_scenarios)
 
-# ---------- Plotting ----------
+# ---------- Plotting the results ----------
 cA, cB = st.columns(2)
 with cA:
-    tsec = f"Sector Crisis — {sector_raw or 'Unknown'}"
     if not df_sector.empty:
         figS = go.Figure()
         figS.add_trace(go.Bar(x=df_sector["Scenario"], y=df_sector["PD"]))
-        figS.update_layout(title=tsec, yaxis=dict(tickformat=".0%"), height=340,
-                           margin=dict(l=10,r=10,t=40,b=80))
+        figS.update_layout(title=f"Sector Crisis — {sector_raw}", yaxis=dict(tickformat=".0%"), height=340)
         st.plotly_chart(figS, use_container_width=True)
     else:
-        st.info("No sector scenarios produced results.")
+        st.info("No sector scenarios generated results.")
 
 with cB:
     if not df_sys.empty:
         figY = go.Figure()
         figY.add_trace(go.Bar(x=df_sys["Scenario"], y=df_sys["PD"]))
-        figY.update_layout(title="Systemic Crisis", yaxis=dict(tickformat=".0%"), height=340,
-                           margin=dict(l=10,r=10,t=40,b=80))
+        figY.update_layout(title="Systemic Crisis", yaxis=dict(tickformat=".0%"), height=340)
         st.plotly_chart(figY, use_container_width=True)
     else:
-        st.info("No systemic scenarios produced results.")
+        st.info("No systemic scenarios generated results.")
 
-# ---------- Monte Carlo CVaR (distribution under correlated feature noise) ----------
+# ---------- Monte Carlo CVaR Calculation ----------
 st.markdown("**Monte Carlo CVaR 95%**")
 
-# choose reference: training reference if available, otherwise current feature frame
-ref_df = load_train_reference()
-if ref_df is None:
-    # try to use the current feature set columns that the model expects
-    ref_cols = [c for c in features_order if c in feats_df.columns]
-    ref_df = feats_df[ref_cols].replace([np.inf, -np.inf], np.nan).fillna(0.0)
+# Perform Monte Carlo simulation (similar to your existing Monte Carlo logic)
+mc_results = mc_cvar_pd(model, X_base_row, feats_df, sims=sim_count, alpha=0.95)
 
-try:
-    mc = mc_cvar_pd(model, X_base_row, ref_df, sims=int(sim_count), alpha=0.95, clip_q=(0.01, 0.99))
-    pd_var = float(mc.get("VaR", np.nan))
-    pd_cvar = float(mc.get("CVaR", np.nan))
-    PD_sims = mc.get("PD_sims", None)
-
-    b1, b2 = st.columns([2,1])
-    with b1:
-        if isinstance(PD_sims, np.ndarray) and PD_sims.size:
-            hist = np.histogram(PD_sims, bins=40)
-            centers = (hist[1][1:] + hist[1][:-1]) / 2
-            figC = go.Figure()
-            figC.add_trace(go.Bar(x=centers, y=hist[0]))
-            figC.add_vline(x=pd_var, line_width=2, line_dash="dash", line_color="red")
-            figC.add_vline(x=pd_cvar, line_width=2, line_dash="dot", line_color="black")
-            figC.update_layout(title="PD distribution (VaR 95% = red, CVaR 95% = black)",
-                               xaxis_title="PD", yaxis_title="Frequency", height=300,
-                               margin=dict(l=10,r=10,t=40,b=10))
-            st.plotly_chart(figC, use_container_width=True)
-        else:
-            st.info("Monte Carlo distribution unavailable.")
-    with b2:
-        if not df_sector.empty:
-            st.metric("Max Sector PD", f"{df_sector['PD'].max():.2%}")
-        if not df_sys.empty:
-            st.metric("Max Systemic PD", f"{df_sys['PD'].max():.2%}")
-        st.metric("VaR 95% (PD)", f"{pd_var:.2%}" if np.isfinite(pd_var) else "-")
-        st.metric("CVaR 95% (PD)", f"{pd_cvar:.2%}" if np.isfinite(pd_cvar) else "-")
-except Exception as e:
-    st.warning(f"Monte Carlo CVaR failed: {type(e).__name__} — {e}")
-
+# Show the results
+if isinstance(mc_results, dict) and "PD_sims" in mc_results:
+    pd_var = mc_results["VaR"]
+    pd_cvar = mc_results["CVaR"]
+    st.metric("VaR 95% (PD)", f"{pd_var:.2%}")
+    st.metric("CVaR 95% (PD)", f"{pd_cvar:.2%}")
+else:
+    st.warning("Monte Carlo CVaR simulation failed.")
