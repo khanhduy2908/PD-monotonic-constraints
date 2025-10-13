@@ -211,11 +211,25 @@ final_features = select_features_for_model(feats_df, candidate_features, model_f
 
 # ===================== Sidebar Inputs & Profile =====================
 all_tickers = sorted(feats_df["Ticker"].astype(str).unique().tolist())
-ticker = st.sidebar.selectbox("Ticker", all_tickers, index=0 if all_tickers else None)
+ticker = st.sidebar.selectbox(
+    "Ticker",
+    all_tickers,
+    index=0 if all_tickers else None,
+    key="sb_ticker"  # khóa duy nhất
+)
 
-years_avail = sorted(feats_df.loc[feats_df["Ticker"].astype(str)==ticker, "Year"].dropna().astype(int).unique().tolist())
+years_avail = sorted(
+    feats_df.loc[feats_df["Ticker"].astype(str)==ticker, "Year"]
+    .dropna().astype(int).unique().tolist()
+)
 year_idx = len(years_avail)-1 if years_avail else 0
-year = st.sidebar.selectbox("Year", years_avail, index=year_idx)
+
+year = st.sidebar.selectbox(
+    "Year",
+    years_avail,
+    index=year_idx,
+    key=f"sb_year_{ticker}"
+)
 
 row_model = feats_df[(feats_df["Ticker"].astype(str)==ticker) & (feats_df["Year"]==year)]
 if row_model.empty:
