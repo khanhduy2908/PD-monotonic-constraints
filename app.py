@@ -552,204 +552,132 @@ SYSTEMIC_SCENARIOS = [
     "Market Liquidity Crisis",
     "Interest Rate +300bps",
     "Government Tightening",
-    "US–China Tariffs (broad)"
+    "Tariffs"
 ]
 
 # 2) Preset PD theo MÃ (ưu tiên) & theo NGÀNH (mặc định)
-#   - Nếu mã không có trong bảng, dùng theo ngành; nếu ngành cũng không có, dùng 'Other'
-#   - Các PD là ABSOLUTE PD dưới từng scenario (không cộng/trừ baseline)
+#    PD dưới đây là ABSOLUTE PD dưới từng scenario (không cộng/trừ baseline)
 PRESET_PD = {
     "ticker": {
-        # VÍ DỤ một số mã phổ biến (bạn bổ sung thêm tùy thị trường)
-        "HAG": {  # Real Estate/Agri mix; hồ sơ rủi ro cao
+        "HAG": {
             "baseline_min": 0.45,
-            "sector": {
-                "Credit Tightening": 0.78,
-                "Property Price Correction": 0.72
-            },
+            "sector": {"Credit Tightening": 0.78, "Property Price Correction": 0.72},
             "systemic": {
                 "Global Financial Crisis": 0.85,
                 "Market Liquidity Crisis": 0.82,
                 "Interest Rate +300bps": 0.76,
                 "Government Tightening": 0.70,
-                "US–China Tariffs (broad)": 0.62
+                "Tariffs": 0.62
             }
         },
-        "ROS": {  # xây dựng/real estate rủi ro cao
+        "ROS": {
             "baseline_min": 0.35,
-            "sector": {
-                "Credit Tightening": 0.60,
-                "Property Price Correction": 0.55
-            },
+            "sector": {"Credit Tightening": 0.60, "Property Price Correction": 0.55},
             "systemic": {
                 "Global Financial Crisis": 0.70,
                 "Market Liquidity Crisis": 0.66,
                 "Interest Rate +300bps": 0.58,
                 "Government Tightening": 0.52,
-                "US–China Tariffs (broad)": 0.40
+                "Tariffs": 0.40
             }
         },
-        "HPG": {  # Materials/Steel
+        "HPG": {
             "baseline_min": 0.12,
-            "sector": {
-                "Steel Price Collapse": 0.40,
-                "Energy Cost Surge": 0.32
-            },
+            "sector": {"Steel Price Collapse": 0.40, "Energy Cost Surge": 0.32},
             "systemic": {
                 "Global Financial Crisis": 0.45,
                 "Market Liquidity Crisis": 0.38,
                 "Interest Rate +300bps": 0.28,
                 "Government Tightening": 0.24,
-                "US–China Tariffs (broad)": 0.22
+                "Tariffs": 0.22
             }
         },
-        "VHM": {  # Real Estate large-cap
+        "VHM": {
             "baseline_min": 0.10,
-            "sector": {
-                "Credit Tightening": 0.38,
-                "Property Price Correction": 0.34
-            },
+            "sector": {"Credit Tightening": 0.38, "Property Price Correction": 0.34},
             "systemic": {
                 "Global Financial Crisis": 0.42,
                 "Market Liquidity Crisis": 0.40,
                 "Interest Rate +300bps": 0.30,
                 "Government Tightening": 0.28,
-                "US–China Tariffs (broad)": 0.18
+                "Tariffs": 0.18
             }
         },
-        "VNM": {  # Consumer Staples
+        "VNM": {
             "baseline_min": 0.05,
-            "sector": {
-                "Energy Price Shock": 0.18,
-                "Food Input Spike": 0.20
-            },
+            "sector": {"Energy Price Shock": 0.18, "Food Input Spike": 0.20},
             "systemic": {
                 "Global Financial Crisis": 0.22,
                 "Market Liquidity Crisis": 0.20,
                 "Interest Rate +300bps": 0.14,
                 "Government Tightening": 0.12,
-                "US–China Tariffs (broad)": 0.10
+                "Tariffs": 0.10
             }
         },
-        "FPT": {  # Technology
+        "FPT": {
             "baseline_min": 0.06,
-            "sector": {
-                "Valuation Reset": 0.22,
-                "Supply Chain Disruptions": 0.18
-            },
+            "sector": {"Valuation Reset": 0.22, "Supply Chain Disruptions": 0.18},
             "systemic": {
                 "Global Financial Crisis": 0.26,
                 "Market Liquidity Crisis": 0.24,
                 "Interest Rate +300bps": 0.16,
                 "Government Tightening": 0.14,
-                "US–China Tariffs (broad)": 0.18
+                "Tariffs": 0.18
             }
         },
-        "GAS": {  # Energy
+        "GAS": {
             "baseline_min": 0.08,
-            "sector": {
-                "Oil Demand Crash": 0.30,
-                "Field Outage": 0.24
-            },
+            "sector": {"Oil Demand Crash": 0.30, "Field Outage": 0.24},
             "systemic": {
                 "Global Financial Crisis": 0.34,
                 "Market Liquidity Crisis": 0.30,
                 "Interest Rate +300bps": 0.20,
                 "Government Tightening": 0.18,
-                "US–China Tariffs (broad)": 0.16
+                "Tariffs": 0.16
             }
         },
-        "VJC": {  # Transportation/Airline
+        "VJC": {
             "baseline_min": 0.15,
-            "sector": {
-                "Travel Collapse": 0.55,
-                "Fuel Spike": 0.40
-            },
+            "sector": {"Travel Collapse": 0.55, "Fuel Spike": 0.40},
             "systemic": {
                 "Global Financial Crisis": 0.58,
                 "Market Liquidity Crisis": 0.52,
                 "Interest Rate +300bps": 0.34,
                 "Government Tightening": 0.30,
-                "US–China Tariffs (broad)": 0.22
+                "Tariffs": 0.22
             }
         },
-        "VIC": {  # Conglomerate / Cons. Disc.
+        "VIC": {
             "baseline_min": 0.12,
-            "sector": {
-                "COVID Demand Shock": 0.36,
-                "Luxury Slowdown": 0.32
-            },
+            "sector": {"COVID Demand Shock": 0.36, "Luxury Slowdown": 0.32},
             "systemic": {
                 "Global Financial Crisis": 0.44,
                 "Market Liquidity Crisis": 0.40,
                 "Interest Rate +300bps": 0.30,
                 "Government Tightening": 0.26,
-                "US–China Tariffs (broad)": 0.22
+                "Tariffs": 0.22
             }
         }
     },
     "sector": {
-        # Defaults theo bucket — dùng cho các mã chưa có preset riêng
-        "Real Estate": {
-            "Credit Tightening": 0.42,
-            "Property Price Correction": 0.36
-        },
-        "Materials": {
-            "Steel Price Collapse": 0.34,
-            "Energy Cost Surge": 0.28
-        },
-        "Energy": {
-            "Oil Demand Crash": 0.30,
-            "Field Outage": 0.24
-        },
-        "Technology": {
-            "Valuation Reset": 0.24,
-            "Supply Chain Disruptions": 0.20
-        },
-        "Consumer Discretionary": {
-            "COVID Demand Shock": 0.32,
-            "Luxury Slowdown": 0.26
-        },
-        "Consumer Staples": {
-            "Energy Price Shock": 0.20,
-            "Food Input Spike": 0.22
-        },
-        "Industrials": {
-            "Logistics/Supply Chain": 0.26,
-            "Export Order Drop": 0.22
-        },
-        "Utilities": {
-            "Regulatory Tightening": 0.18
-        },
-        "Financials": {
-            "Credit Loss Cycle": 0.28,
-            "Funding Cost Rise": 0.24
-        },
-        "Healthcare": {
-            "Reimbursement Pressure": 0.20
-        },
-        "Telecom": {
-            "Capex Cycle Upswing": 0.20
-        },
-        "Transportation": {
-            "Travel Collapse": 0.44,
-            "Fuel Spike": 0.34
-        },
-        "Hospitality & Travel": {
-            "Tourism Freeze": 0.48
-        },
-        "Agriculture & Fisheries": {
-            "Export Shock": 0.24
-        },
-        "Automotive": {
-            "Semiconductor Shortage": 0.30
-        },
-        "Other": {
-            "Generic Sector Shock": 0.22
-        }
+        "Real Estate": {"Credit Tightening": 0.42, "Property Price Correction": 0.36},
+        "Materials": {"Steel Price Collapse": 0.34, "Energy Cost Surge": 0.28},
+        "Energy": {"Oil Demand Crash": 0.30, "Field Outage": 0.24},
+        "Technology": {"Valuation Reset": 0.24, "Supply Chain Disruptions": 0.20},
+        "Consumer Discretionary": {"COVID Demand Shock": 0.32, "Luxury Slowdown": 0.26},
+        "Consumer Staples": {"Energy Price Shock": 0.20, "Food Input Spike": 0.22},
+        "Industrials": {"Logistics/Supply Chain": 0.26, "Export Order Drop": 0.22},
+        "Utilities": {"Regulatory Tightening": 0.18},
+        "Financials": {"Credit Loss Cycle": 0.28, "Funding Cost Rise": 0.24},
+        "Healthcare": {"Reimbursement Pressure": 0.20},
+        "Telecom": {"Capex Cycle Upswing": 0.20},
+        "Transportation": {"Travel Collapse": 0.44, "Fuel Spike": 0.34},
+        "Hospitality & Travel": {"Tourism Freeze": 0.48},
+        "Agriculture & Fisheries": {"Export Shock": 0.24},
+        "Automotive": {"Semiconductor Shortage": 0.30},
+        "Other": {"Generic Sector Shock": 0.22}
     },
     "systemic": {
-        # Defaults hệ thống
         "default": {
             "Global Financial Crisis": 0.38,
             "Market Liquidity Crisis": 0.34,
@@ -757,7 +685,6 @@ PRESET_PD = {
             "Government Tightening": 0.22,
             "Tariffs": 0.18
         },
-        # một vài bucket nhạy hơn hệ thống
         "Real Estate": {
             "Global Financial Crisis": 0.45,
             "Market Liquidity Crisis": 0.40,
@@ -806,18 +733,16 @@ for nm in SYSTEMIC_SCENARIOS:
     val = preset_ticker.get("systemic", {}).get(nm, preset_sys_bucket.get(nm, PRESET_PD["systemic"]["default"][nm]))
     abs_pd_systemic.append((nm, float(val)))
 
-# 5) Tính % impact chỉ để vẽ (PD_scenario - PD_baseline)
+# 5) Impact % để vẽ
 df_sector = pd.DataFrame(abs_pd_sector, columns=["Scenario", "PD"])
 df_sector["Impact_%"] = (df_sector["PD"] - baseline_pd) / max(baseline_pd, 1e-9) * 100.0
 
 df_sys = pd.DataFrame(abs_pd_systemic, columns=["Scenario", "PD"])
 df_sys["Impact_%"] = (df_sys["PD"] - baseline_pd) / max(baseline_pd, 1e-9) * 100.0
 
-st.caption(
-    f"Sector raw: {sector_raw or '-'} → Bucket: **{bucket}** • Baseline PD (post-adj): **{baseline_pd:.2%}**"
-)
+st.caption(f"Sector raw: {sector_raw or '-'} → Bucket: **{bucket}** • Baseline PD (post-adj): **{baseline_pd:.2%}**")
 
-# 6) Vẽ biểu đồ (không dùng params deprecated)
+# 6) Vẽ biểu đồ
 c1, c2 = st.columns(2)
 with c1:
     f1 = go.Figure()
@@ -843,22 +768,25 @@ with c2:
     f2.update_layout(
         title="Systemic Impact — ΔPD vs Baseline (%)",
         yaxis=dict(title="Impact (%)"),
-        height=340, margin=dict(l=10, r=10, t=48, b=80), xaxis_tickangle=-30
+        height=340, margin=dict(l=10, r=10, t=48, b=80),
+        xaxis_tickangle=-30
     )
     show_plotly(f2, f"systemic_impact_preset_{ticker}_{year}")
 
-# 7) KPI tóm tắt
-k1, k2 = st.columns(3)
+# 7) KPI tóm tắt (không Monte Carlo)
+k1, k2 = st.columns(2)
 with k1: st.metric("Baseline PD (post-adj)", f"{baseline_pd:.2%}")
-with k2: st.metric("Max PD under crises",
-                   f"{max(df_sector['PD'].max() if not df_sector.empty else 0.0, df_sys['PD'].max() if not df_sys.empty else 0.0):.2%}")
+with k2: st.metric(
+    "Max PD under crises",
+    f"{max(df_sector['PD'].max() if not df_sector.empty else 0.0, df_sys['PD'].max() if not df_sys.empty else 0.0):.2%}"
+)
 
-# 8) Bảng chi tiết (giúp kiểm tra nhanh)
+# 8) Bảng chi tiết
 with st.expander("Scenario details"):
-    out = pd.concat([
-        df_sector.assign(Type="Sector"),
-        df_sys.assign(Type="Systemic")
-    ], ignore_index=True)[["Type","Scenario","PD","Impact_%"]]
+    out = pd.concat(
+        [df_sector.assign(Type="Sector"), df_sys.assign(Type="Systemic")],
+        ignore_index=True
+    )[["Type", "Scenario", "PD", "Impact_%"]]
     out["PD"] = out["PD"].map(lambda v: f"{v:.2%}")
     out["Impact_%"] = out["Impact_%"].map(lambda v: f"{v:+.1f}%")
     st.dataframe(out, hide_index=True, use_container_width=True)
