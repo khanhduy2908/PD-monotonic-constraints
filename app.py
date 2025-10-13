@@ -755,7 +755,7 @@ PRESET_PD = {
             "Market Liquidity Crisis": 0.34,
             "Interest Rate +300bps": 0.24,
             "Government Tightening": 0.22,
-            "US–China Tariffs (broad)": 0.18
+            "Tariffs": 0.18
         },
         # một vài bucket nhạy hơn hệ thống
         "Real Estate": {
@@ -763,21 +763,21 @@ PRESET_PD = {
             "Market Liquidity Crisis": 0.40,
             "Interest Rate +300bps": 0.32,
             "Government Tightening": 0.28,
-            "US–China Tariffs (broad)": 0.20
+            "Tariffs": 0.20
         },
         "Materials": {
             "Global Financial Crisis": 0.42,
             "Market Liquidity Crisis": 0.36,
             "Interest Rate +300bps": 0.26,
             "Government Tightening": 0.24,
-            "US–China Tariffs (broad)": 0.24
+            "Tariffs": 0.24
         },
         "Transportation": {
             "Global Financial Crisis": 0.50,
             "Market Liquidity Crisis": 0.44,
             "Interest Rate +300bps": 0.34,
             "Government Tightening": 0.28,
-            "US–China Tariffs (broad)": 0.22
+            "Tariffs": 0.22
         }
     }
 }
@@ -848,11 +848,10 @@ with c2:
     show_plotly(f2, f"systemic_impact_preset_{ticker}_{year}")
 
 # 7) KPI tóm tắt
-k1, k2, k3 = st.columns(3)
+k1, k2 = st.columns(3)
 with k1: st.metric("Baseline PD (post-adj)", f"{baseline_pd:.2%}")
 with k2: st.metric("Max PD under crises",
                    f"{max(df_sector['PD'].max() if not df_sector.empty else 0.0, df_sys['PD'].max() if not df_sys.empty else 0.0):.2%}")
-with k3: st.metric("No Monte Carlo", "Preset mode")
 
 # 8) Bảng chi tiết (giúp kiểm tra nhanh)
 with st.expander("Scenario details"):
