@@ -374,27 +374,29 @@ else:
 # ===================== D) Stress Testing (Factor-level, sector & systemic) =====================
 st.subheader("D. Stress Testing")
 
-# Removed severity and Monte Carlo sliders, default values used
-severity_label = "Moderate"
-exch_intensity = EXCHANGE_INTENSITY.get(exchange, 1.0)
-sim_count = 5000  # Simulations for Monte Carlo
+# Ensure sector_raw is valid and not empty
+if not sector_raw or pd.isna(sector_raw.strip()):
+    sector_raw = "__default__"  # Default value for invalid or empty sector
 
-# Define scenarios for sector and systemic
+# Log the sector_raw value for debugging
+print(f"Processing sector: {sector_raw}")
+
+# Run sector and systemic scenarios based on the sector_raw
 sector_scenarios_raw = build_sector_scenarios(sector_raw)
 systemic_scenarios_raw = SYSTEMIC_FACTORS
 
-# Scale scenarios based on severity and exchange intensity
+# Scale the scenarios using the severity and exchange intensity
 sector_scenarios = {name: scale_multiplier(m, sev, exch_intensity) for name, m in sector_scenarios_raw.items()}
 systemic_scenarios = {name: scale_multiplier(m, sev, exch_intensity) for name, m in systemic_scenarios_raw.items()}
 
-# Ensure valid data
+# Ensure we have valid data for feature columns
 X_base_row = align_features_to_model(X_base.copy(), model)
 
-# Run scenarios and plot results
+# Run the stress scenarios and plot the results
 df_sector = run_scenarios(model, X_base_row, sector_scenarios)
 df_sys = run_scenarios(model, X_base_row, systemic_scenarios)
 
-# Sector & Systemic Scenario Visualization
+# Visualization for sector and systemic scenarios
 cA, cB = st.columns(2)
 with cA:
     if not df_sector.empty:
@@ -413,7 +415,6 @@ with cB:
         st.plotly_chart(figY, use_container_width=True)
     else:
         st.info("No systemic scenarios generated results.")
-
 # ---------- Monte Carlo CVaR ----------
 st.markdown("**Monte Carlo CVaR 95%**")
 
