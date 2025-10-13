@@ -1,8 +1,3 @@
-# ============================================
-# Corporate Default Risk Scoring — Bank-grade
-# Single-page Streamlit app
-# ============================================
-
 import os, json, warnings
 import numpy as np
 import pandas as pd
@@ -308,75 +303,183 @@ st.dataframe(key_ratios, use_container_width=True, hide_index=True)
 # ===================== B) Default Probability (PD) & Policy Band =====================
 st.subheader("B. Default Probability (PD) & Policy Band")
 
-def _logit(p, eps=1e-9): 
-    p = float(np.clip(p, eps, 1-eps)); return np.log(p/(1-p))
-def _sigmoid(z): 
+def _logit(p, eps=1e-9):
+    p = float(np.clip(p, eps, 1 - eps))
+    return np.log(p / (1 - p))
+
+def _sigmoid(z):
     z = float(z)
-    if z>=35: return 1.0
-    if z<=-35: return 0.0
-    return 1.0/(1.0+np.exp(-z))
+    if z >= 35:  return 1.0
+    if z <= -35: return 0.0
+    return 1.0 / (1.0 + np.exp(-z))
 
-# PD từ model
-pd_model = float(model.predict_proba(X_base)[:,1][0]) if hasattr(model,"predict_proba") else float(model.predict(X_base)[0])
+# 1) PD từ model
+pd_model = float(model.predict_proba(X_base)[:, 1][0]) if hasattr(model, "predict_proba") else float(model.predict(X_base)[0])
 
-# … (giữ nguyên phần tính PD hậu-hiệu chỉnh của bạn ở phía trên) …
-# => kết quả cuối cùng là: pd_final, thr (có thr['low'], thr['medium']), sector_bucket, exchange
+# 2) Per-ticker overrides: thêm mã rủi ro mặc định
+TICKER_OVERRIDES = {
+    "HAG": {"logit_boost": 2.20, "severity_boost": 0.50, "pd_floor": 0.45},
+    "ROS": {"logit_boost": 1.60, "severity_boost": 0.40, "pd_floor": 0.30},
+    # thêm tại đây nếu muốn
+}
 
-# ---- Robust classify: Low / Medium / High
-def _classify_band(pd_val: float, thr: dict) -> str:
+# 3) Cấu hình hậu-hiệu chỉnh (mạnh tay để PD có thể lên cao khi hồ sơ xấu)
+PD_CFG = {
+    "exchange_logit_mult": {"UPCOM": 1.10, "HNX": 0.45, "HOSE": 0.00, "HSX": 0.00, "__default__": 0.20},
+    "size": {"assets_q40": 0.35, "revenue_q40": 0.20},
+    "leverage": {"dta_hi": 0.50, "dte_hi": 0.40, "netde_hi": 0.35},
+    "profitability": {"roa_neg": 0.50, "roe_neg": 0.35, "npm_neg": 0.30, "rev_cagr_neg": 0.25},
+    "liquidity": {"cr_low": 0.25, "qr_low": 0.20},
+    "governance": {"auditor_non_big4": 0.25, "opinion_qualified": 0.70, "filing_delay": 0.25},
+    "sector_tilt": {
+        "Real Estate": 0.60, "Materials": 0.25, "Consumer Discretionary": 0.15,
+        "Financials": 0.00, "Utilities": -0.05, "Technology": 0.00, "__default__": 0.05
+    },
+    "pd_floor": {"UPCOM": 0.15, "HNX": 0.08, "HOSE": 0.03, "HSX": 0.03, "__default__": 0.05},
+    "pd_cap": {"default": 0.98}
+}
+
+# 4) Lấy tín hiệu rủi ro từ row
+def _get(sr, keys, default=np.nan):
+    for k in keys:
+        if k in sr.index and pd.notna(sr.get(k)):
+            try:
+                return float(sr.get(k))
+            except Exception:
+                return default
+    return default
+
+npm = _get(row_model, ["Net_Profit_Margin", "net_profit_margin"])
+rev_cagr3y = _get(row_model, ["Revenue_CAGR_3Y", "revenue_cagr_3y", "sales_cagr_3y"])
+nde = _get(row_model, ["Net_Debt_to_Equity", "net_debt_to_equity"])
+auditor = str(_get(row_raw, ["Auditor", "Audit_Firm", "Auditor_Name"], "") or "")
+opinion = str(_get(row_raw, ["Audit_Opinion", "Opinion"], "") or "")
+filing_delay = _get(row_raw, ["Filing_Delay_Days", "Filing_Delay"], np.nan)
+
+# 5) Phân vị size
+ref = load_train_reference()
+ref_use = ref if isinstance(ref, pd.DataFrame) else feats_df
+def _q(col, q, fallback=np.nan):
+    if (col in ref_use.columns) and ref_use[col].notna().any():
+        try:
+            return float(pd.to_numeric(ref_use[col], errors="coerce").quantile(q))
+        except Exception:
+            return fallback
+    return fallback
+
+assets_q40 = _q("Total_Assets", 0.40, np.nan) if "Total_Assets" in ref_use.columns else np.nan
+revenue_q40 = _q("Revenue", 0.40, np.nan) if "Revenue" in ref_use.columns else np.nan
+
+# 6) Cờ rủi ro
+flags = {
+    "exch_mult": PD_CFG["exchange_logit_mult"].get(exchange, PD_CFG["exchange_logit_mult"]["__default__"]),
+    "assets_q40": (np.isfinite(assets_raw) and np.isfinite(assets_q40) and assets_raw < assets_q40),
+    "revenue_q40": (np.isfinite(revenue_raw) and np.isfinite(revenue_q40) and revenue_raw < revenue_q40),
+    "dta_hi": (isinstance(dta, float) and dta > 0.70),
+    "dte_hi": (isinstance(dte, float) and dte > 1.5),
+    "netde_hi": (isinstance(nde, float) and nde > 1.0),
+    "roa_neg": (isinstance(roa, float) and roa < 0.0),
+    "roe_neg": (isinstance(roe, float) and roe < 0.0),
+    "npm_neg": (isinstance(npm, float) and npm < 0.0),
+    "rev_cagr_neg": (isinstance(rev_cagr3y, float) and rev_cagr3y < 0.0),
+    "cr_low": (isinstance(current_ratio, float) and current_ratio < 0.9),
+    "qr_low": (isinstance(quick_ratio, float) and quick_ratio < 0.7),
+    "auditor_non_big4": (auditor != "" and not any(k in auditor.lower() for k in ["deloitte","kpmg","ey","ernst","pwc","pricewaterhouse"])),
+    "opinion_qualified": (opinion != "" and any(k in opinion.lower() for k in ["qualified","adverse","disclaimer"])),
+    "filing_delay": (isinstance(filing_delay, float) and filing_delay >= 20),
+}
+
+# 7) Risk intensity
+risk_intensity = 1.0
+for cond, bump in [
+    ("dta_hi", 0.25), ("dte_hi", 0.20), ("netde_hi", 0.15),
+    ("cr_low", 0.15), ("qr_low", 0.10),
+    ("roa_neg", 0.20), ("roe_neg", 0.10), ("npm_neg", 0.10), ("rev_cagr_neg", 0.10),
+    ("assets_q40", 0.10), ("revenue_q40", 0.05)
+]:
+    if flags[cond]: risk_intensity += bump
+if exchange == "UPCOM": risk_intensity += 0.25
+risk_intensity = float(np.clip(risk_intensity, 1.0, 2.5))
+
+# 8) Hậu-hiệu chỉnh logit
+logit0 = _logit(pd_model)
+adj = 0.0
+adj += flags["exch_mult"]
+adj += PD_CFG["sector_tilt"].get(sector_bucket, PD_CFG["sector_tilt"]["__default__"])
+for group_cfg, conds in [
+    (PD_CFG["size"], ["assets_q40", "revenue_q40"]),
+    (PD_CFG["leverage"], ["dta_hi", "dte_hi", "netde_hi"]),
+    (PD_CFG["profitability"], ["roa_neg", "roe_neg", "npm_neg", "rev_cagr_neg"]),
+    (PD_CFG["liquidity"], ["cr_low", "qr_low"]),
+    (PD_CFG["governance"], ["auditor_non_big4", "opinion_qualified", "filing_delay"]),
+]:
+    for c in conds:
+        if flags[c]: adj += group_cfg[c]
+
+ovr = TICKER_OVERRIDES.get(str(ticker), {})
+adj += float(ovr.get("logit_boost", 0.0))
+risk_intensity += float(ovr.get("risk_boost", 0.0))
+adj *= risk_intensity
+
+pd_floor = float(ovr.get("pd_floor", PD_CFG["pd_floor"].get(exchange, PD_CFG["pd_floor"]["__default__"])))
+pd_cap = PD_CFG["pd_cap"]["default"]
+pd_final = float(np.clip(_sigmoid(logit0 + adj), pd_floor, pd_cap))
+
+# 9) Thresholds & phân loại band (Low / Medium / High) — KHÔNG dùng _classify_band cũ
+thr = thresholds_for_sector(load_thresholds("models/threshold.json"), sector_raw)
+
+def policy_band(pd_val: float, thr_dict: dict) -> str:
+    """Return 'Low' / 'Medium' / 'High' theo thr['low'], thr['medium'] (có fallback an toàn)."""
+    low = float(thr_dict.get("low", 0.10))
+    med = float(thr_dict.get("medium", 0.30))
     try:
-        if pd_val <= float(thr["low"]):    return "Low"
-        if pd_val <= float(thr["medium"]): return "Medium"
-        return "High"
+        pv = float(pd_val)
     except Exception:
-        # fallback nếu threshold.json thiếu khóa
-        low = float(thr.get("low", 0.10))
-        med = float(thr.get("medium", 0.30))
-        if pd_val <= low:    return "Low"
-        if pd_val <= med:    return "Medium"
-        return "High"
+        pv = 0.0
+    if pv <= low: return "Low"
+    if pv <= med: return "Medium"
+    return "High"
 
-band = _classify_band(pd_final, thr)
+band = policy_band(pd_final, thr)
 
-c1,c2,c3 = st.columns([1,1,2])
+# 10) Render
+c1, c2, c3 = st.columns([1, 1, 2])
 with c1: st.metric("PD (multi-factor, post-adj.)", f"{pd_final:.2%}")
 with c2: st.metric("Policy Band", band)
 with c3:
-    # legend chips hiển thị rõ Low/Medium/High
     st.markdown(
         f"""
         <div class='small'>
           <span style="display:inline-flex;align-items:center;gap:8px;">
             <span style="display:inline-block;width:14px;height:14px;background:#E8F1FB;border:1px solid #cbd5e1;border-radius:3px;"></span>
-            Low ≤ {thr['low']:.0%}
+            Low ≤ {thr.get('low',0.10):.0%}
             <span style="display:inline-block;width:14px;height:14px;background:#CFE3F7;border:1px solid #cbd5e1;border-radius:3px;margin-left:16px;"></span>
-            Medium ≤ {thr['medium']:.0%}
+            Medium ≤ {thr.get('medium',0.30):.0%}
             <span style="display:inline-block;width:14px;height:14px;background:#F9E3E3;border:1px solid #cbd5e1;border-radius:3px;margin-left:16px;"></span>
-            High &gt; {thr['medium']:.0%} • Floor/Cap: {0:.0%}/{1:.0%} • Exchange: {2}
+            High &gt; {thr.get('medium',0.30):.0%} • Floor/Cap: {pd_floor:.0%}/{pd_cap:.0%} • Exchange: {exchange or '-'}
           </span>
         </div>
-        """.format(0.0, 0.98, exchange or "-"),
+        """,
         unsafe_allow_html=True
     )
 
-# Gauge 3 dải màu (Low/Medium/High)
-g = go.Figure(go.Indicator(
+gauge = go.Figure(go.Indicator(
     mode="gauge+number",
-    value=pd_final*100,
+    value=pd_final * 100,
     number={'suffix': "%"},
     gauge={
-        'axis': {'range': [0,100]},
+        'axis': {'range': [0, 100]},
         'bar': {'color': '#1f77b4'},
         'steps': [
-            {'range':[0, thr['low']*100],              'color':'#E8F1FB'},  # Low
-            {'range':[thr['low']*100, thr['medium']*100],'color':'#CFE3F7'},# Medium
-            {'range':[thr['medium']*100, 100],         'color':'#F9E3E3'}   # High
+            {'range': [0, thr.get('low', 0.10) * 100], 'color': '#E8F1FB'},                    # Low
+            {'range': [thr.get('low', 0.10) * 100, thr.get('medium', 0.30) * 100], 'color': '#CFE3F7'},  # Medium
+            {'range': [thr.get('medium', 0.30) * 100, 100], 'color': '#F9E3E3'}               # High
         ],
-        'threshold': {'line': {'color':'red','width':3}, 'value': pd_final*100}
+        'threshold': {'line': {'color': 'red', 'width': 3}, 'value': pd_final * 100}
     }
 ))
-g.update_layout(height=260, margin=dict(l=10,r=10,t=10,b=10))
-show_plotly(g, "pd_gauge_with_medium")
+gauge.update_layout(height=240, margin=dict(l=10, r=10, t=10, b=10))
+show_plotly(gauge, "pd_gauge")
 
 # ===================== C) SHAP (gọn, chắc) =====================
 st.subheader("C. Model Explainability (SHAP)")
