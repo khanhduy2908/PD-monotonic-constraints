@@ -173,32 +173,25 @@ def load_dataset(path: str):
         st.stop()
 
     try:
-        # Thử đọc với UTF-8-SIG (phù hợp cho file có tiếng Việt)
         df = pd.read_csv(path, encoding="utf-8-sig")
     except Exception as e_utf:
         try:
-            # Thử lại với latin1 (phòng trường hợp encoding lạ)
             df = pd.read_csv(path, encoding="latin1")
         except Exception as e_lat:
             st.error(f"❌ Failed to read dataset. UTF-8 error: {e_utf}\nLatin1 error: {e_lat}")
             st.stop()
 
-    # Kiểm tra cột
     if df.shape[1] == 0 or df.columns.str.strip().tolist() == []:
         st.error("❌ Dataset error: No columns detected. Please check that the file has a header row.")
         st.stop()
 
-    # Kiểm tra một số cột quan trọng
     required_cols = ['Ticker', 'Year', 'Sector', 'Exchange']
     missing_cols = [c for c in required_cols if c not in df.columns]
     if missing_cols:
         st.error(f"❌ Missing required columns in dataset: {', '.join(missing_cols)}")
         st.stop()
 
-    # Làm sạch nhẹ tên cột (bỏ khoảng trắng 2 đầu)
     df.columns = df.columns.str.strip()
-
-    # Bỏ các dòng trống hoàn toàn
     df.dropna(how="all", inplace=True)
 
     if df.empty:
