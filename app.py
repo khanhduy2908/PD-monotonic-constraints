@@ -457,6 +457,7 @@ SECTOR_CRISIS_SCENARIOS = {
     }
 }
 
+
 # -------------------------------------------------------------
 # Select appropriate sector-based stress scenarios based on user input
 def build_sector_scenarios(sector_name: str) -> dict:
@@ -498,6 +499,27 @@ sector_scenarios = build_sector_scenarios(sector_raw)
 sector_scenarios_scaled = {scenario: scale_multiplier(factor, sev, exch_intensity) 
                            for scenario, factor in sector_scenarios.items()}
 
+# -------------------------------------------------------------
+# Define run_scenarios function to apply the crisis factors and get PD values
+def run_scenarios(model, X_base_row, sector_scenarios_scaled):
+    """
+    This function takes the model, base data row, and scaled sector scenarios
+    and applies the factors to compute the Probability of Default (PD) for each scenario.
+    """
+    results = []
+    for scenario, factors in sector_scenarios_scaled.items():
+        # Apply the scaled factors to the base row
+        X_scaled = apply_multipliers_once(X_base_row.copy(), factors)
+        
+        # Get PD value for this scenario
+        pd_value = score_pd(model, X_scaled)
+        
+        # Append the result
+        results.append({"Scenario": scenario, "PD": pd_value})
+    
+    return pd.DataFrame(results)
+
+# -------------------------------------------------------------
 # Run the scenario test and get PD (Probability of Default) values for each scenario
 df_sector = run_scenarios(model, X_base_row, sector_scenarios_scaled)
 
@@ -514,7 +536,6 @@ if not df_sector.empty:
     st.plotly_chart(fig, width='stretch')  # Updated to match Streamlit's new API
 else:
     st.info("No sector scenarios generated results.")
-    
     
 # ---------- Monte Carlo CVaR ----------
 st.markdown("**Monte Carlo CVaR 95%**")
