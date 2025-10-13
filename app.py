@@ -382,7 +382,6 @@ if not sector_raw or pd.isna(sector_raw.strip()):
 st.write(f"Sector raw: {sector_raw}")  # Display sector for debugging purposes
 
 # ------ Define realistic sector-specific crisis scenarios --------
-# Define realistic sector-specific crisis scenarios
 SECTOR_CRISIS_SCENARIOS = {
     "Technology": {
         "Tech Crunch": {
@@ -471,17 +470,27 @@ def build_sector_scenarios(sector_name: str) -> dict:
 # Run stress test and apply dynamic factors to the model input
 sector_scenarios = build_sector_scenarios(sector_raw)
 
+# -------------------------------------------------------------
 # Scale the crisis multipliers based on selected severity and exchange intensity
-sector_scenarios_scaled = {scenario: scale_multiplier(factor, sev, ex_intensity) for scenario, factor in sector_scenarios.items()}
+# This will adjust the impact based on the user's choice of severity and exchange intensity
+sector_scenarios_scaled = {
+    scenario: scale_multiplier(factor, sev, ex_intensity) 
+    for scenario, factor in sector_scenarios.items()
+}
 
-# Run the scenario test and get PD values
+# Run the scenario test and get PD (Probability of Default) values for each scenario
 df_sector = run_scenarios(model, X_base_row, sector_scenarios_scaled)
 
-# Plot the sector scenario results
+# -------------------------------------------------------------
+# Visualization of the stress test results for sector-specific crises
 if not df_sector.empty:
     fig = go.Figure()
     fig.add_trace(go.Bar(x=df_sector["Scenario"], y=df_sector["PD"]))
-    fig.update_layout(title=f"Sector Crisis Impact — {sector_raw}", yaxis=dict(tickformat=".0%"), height=340)
+    fig.update_layout(
+        title=f"Sector Crisis Impact — {sector_raw}",
+        yaxis=dict(tickformat=".0%"),
+        height=340
+    )
     st.plotly_chart(fig, use_container_width=True)
 else:
     st.info("No sector scenarios generated results.")
