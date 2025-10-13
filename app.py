@@ -382,30 +382,194 @@ key_ratios = pd.DataFrame({
 key_ratios["Value"] = key_ratios["Value"].apply(fmt_ratio)
 st.dataframe(key_ratios, use_container_width=True, hide_index=True)
 
-# ===================== B) PD & Policy =====================
+# ===================== B) Default Probability (PD) & Policy (Multi-factor) =====================
 st.subheader("B. Default Probability (PD) & Policy Band")
+
+# --- Helpers ---
+def _sigmoid(z): 
+    z = float(z)
+    if z >= 35: return 1.0
+    if z <= -35: return 0.0
+    return 1.0 / (1.0 + np.exp(-z))
+
+def _logit(p, eps=1e-9):
+    p = float(np.clip(p, eps, 1 - eps))
+    return np.log(p / (1 - p))
+
+def _safe(v): 
+    try:
+        return float(v) if pd.notna(v) else np.nan
+    except Exception:
+        return np.nan
+
+# --- 1) PD gốc từ model (không hiệu chỉnh) ---
 if hasattr(model, "predict_proba"):
-    pd_base = float(model.predict_proba(X_base)[:,1][0])
+    pd_base = float(model.predict_proba(X_base)[:, 1][0])
 else:
     pd_base = float(model.predict(X_base)[0])
 
-thr = thresholds_for_sector(load_thresholds("models/threshold.json"), sector_raw)
-band = classify_pd(pd_base, thr)
+# --- 2) Tải cấu hình trọng số (nếu không có file thì dùng default) ---
+DEFAULT_PD_CFG = {
+    # Hệ số cộng vào LOG-ODDS (tức là linear trên logit), có thể âm/dương
+    # A. Listing board / liquidity premium (UPCoM cao nhất)
+    "exchange_logit_mult": {"UPCOM": 0.40, "HNX": 0.18, "HOSE": 0.00, "HSX": 0.00, "__default__": 0.10},
+    # B. Quy mô (size): nhỏ rủi ro hơn
+    "size": {"assets_q40": 0.20, "revenue_q40": 0.10},
+    # C. Đòn bẩy & cấu trúc vốn
+    "leverage": {"dta_hi": 0.25, "dte_hi": 0.20, "netde_hi": 0.15},
+    # D. Lợi nhuận & tăng trưởng
+    "profitability": {"roa_neg": 0.25, "roe_neg": 0.20, "npm_neg": 0.15, "rev_cagr_neg": 0.10},
+    # E. Thanh khoản ngắn hạn
+    "liquidity": {"cr_low": 0.12, "qr_low": 0.08},
+    # F. Governance / chất lượng BCTC
+    "governance": {"auditor_non_big4": 0.10, "opinion_qualified": 0.30, "filing_delay": 0.12},
+    # G. Sector tilt (một số nhóm vốn có PD nền cao hơn)
+    "sector_tilt": {
+        "Real Estate": 0.15, "Materials": 0.08, "Energy": 0.08,
+        "Financials": 0.00, "Technology": -0.02, "__default__": 0.00
+    },
+    # H. Giới hạn floor/ceiling theo sàn (đảm bảo phản ánh rủi ro tối thiểu)
+    "pd_floor": {"UPCOM": 0.06, "HNX": 0.04, "HOSE": 0.02, "HSX": 0.02, "__default__": 0.03},
+    "pd_cap":   {"default": 0.60}
+}
 
-c1,c2,c3 = st.columns([1,1,2])
-with c1: st.metric("PD", f"{pd_base:.2%}")
+def load_pd_cfg(path="models/pd_adjustments.json"):
+    try:
+        if os.path.exists(path):
+            return json.load(open(path, "r", encoding="utf-8"))
+    except Exception:
+        pass
+    return DEFAULT_PD_CFG
+
+import json
+PD_CFG = load_pd_cfg()
+
+# --- 3) Truy xuất tín hiệu rủi ro từ hàng đã chọn (không dùng Interest_Coverage / EBITDA_to_Interest) ---
+# Dùng giá trị raw đã lấy ở phần trên: assets_raw, revenue_raw, roa, roe, dta, dte, current_ratio, quick_ratio, ...
+# Thêm một số cột tùy chọn nếu có trong raw_df: 'Auditor', 'Audit_Opinion', 'Filing_Delay_Days', 'Net_Debt_to_Equity', 'Net_Profit_Margin', 'Revenue_CAGR_3Y'
+def _from_row(series, keys, default=np.nan):
+    for k in keys:
+        if k in series.index and pd.notna(series.get(k)): 
+            return _safe(series.get(k))
+    return default
+
+npm = _from_row(row_model, ["Net_Profit_Margin","net_profit_margin"])
+rev_cagr3y = _from_row(row_model, ["Revenue_CAGR_3Y","revenue_cagr_3y","sales_cagr_3y"])
+nde = _from_row(row_model, ["Net_Debt_to_Equity","net_debt_to_equity"])
+auditor = str(_from_row(row_raw, ["Auditor","Audit_Firm","Auditor_Name"], "") or "")
+opinion = str(_from_row(row_raw, ["Audit_Opinion","Opinion"], "") or "")
+filing_delay = _from_row(row_raw, ["Filing_Delay_Days","Filing_Delay"], np.nan)
+
+# --- 4) Ngưỡng tham chiếu từ bộ train (phân vị theo toàn tập) ---
+ref = load_train_reference()
+ref_use = ref if isinstance(ref, pd.DataFrame) else feats_df
+def _q(col, q, fallback=np.nan):
+    if (col in ref_use.columns) and ref_use[col].notna().any():
+        try: return float(ref_use[col].quantile(q))
+        except Exception: return fallback
+    return fallback
+
+assets_q40 = _q("Total_Assets", 0.40, np.nan) if "Total_Assets" in ref_use.columns else np.nan
+revenue_q40 = _q("Revenue", 0.40, np.nan) if "Revenue" in ref_use.columns else np.nan
+
+# --- 5) Dựng các cờ tín hiệu (booleans) ---
+flags = {
+    # Exchange premium
+    "exch_mult": PD_CFG["exchange_logit_mult"].get(exchange, PD_CFG["exchange_logit_mult"]["__default__"]),
+    # Size
+    "assets_q40": (assets_raw is not None and np.isfinite(_safe(assets_raw)) and np.isfinite(assets_q40) and float(assets_raw) < assets_q40),
+    "revenue_q40": (revenue_raw is not None and np.isfinite(_safe(revenue_raw)) and np.isfinite(revenue_q40) and float(revenue_raw) < revenue_q40),
+    # Leverage
+    "dta_hi": (isinstance(dta, float) and dta > 0.65),
+    "dte_hi": (isinstance(dte, float) and dte > 1.0),
+    "netde_hi": (isinstance(nde, float) and nde > 0.8),
+    # Profitability & growth
+    "roa_neg": (isinstance(roa, float) and roa < 0.0),
+    "roe_neg": (isinstance(roe, float) and roe < 0.0),
+    "npm_neg": (isinstance(npm, float) and npm < 0.0),
+    "rev_cagr_neg": (isinstance(rev_cagr3y, float) and rev_cagr3y < 0.0),
+    # Liquidity
+    "cr_low": (isinstance(current_ratio, float) and current_ratio < 1.0),
+    "qr_low": (isinstance(quick_ratio, float) and quick_ratio < 0.8),
+    # Governance
+    "auditor_non_big4": (auditor != "" and not any(k in auditor.lower() for k in ["deloitte","kpmg","ey","ernst","pwc","pricewaterhouse"])),
+    "opinion_qualified": (opinion != "" and any(k in opinion.lower() for k in ["qualified","adverse","disclaimer"])),
+    "filing_delay": (isinstance(filing_delay, float) and filing_delay >= 20),  # nộp chậm > ~3 tuần
+}
+
+# --- 6) Log-odds adjustment tổng hợp (đa yếu tố) ---
+logit0 = _logit(pd_base)
+adj = 0.0
+
+# 6a. Exchange
+adj += flags["exch_mult"]
+
+# 6b. Sector tilt
+adj += PD_CFG["sector_tilt"].get(sector_alias, PD_CFG["sector_tilt"].get(sector_bucket, PD_CFG["sector_tilt"]["__default__"]))
+
+# 6c. Size
+if flags["assets_q40"]:  adj += PD_CFG["size"]["assets_q40"]
+if flags["revenue_q40"]: adj += PD_CFG["size"]["revenue_q40"]
+
+# 6d. Leverage
+if flags["dta_hi"]:  adj += PD_CFG["leverage"]["dta_hi"]
+if flags["dte_hi"]:  adj += PD_CFG["leverage"]["dte_hi"]
+if flags["netde_hi"]: adj += PD_CFG["leverage"]["netde_hi"]
+
+# 6e. Profitability & growth
+if flags["roa_neg"]:       adj += PD_CFG["profitability"]["roa_neg"]
+if flags["roe_neg"]:       adj += PD_CFG["profitability"]["roe_neg"]
+if flags["npm_neg"]:       adj += PD_CFG["profitability"]["npm_neg"]
+if flags["rev_cagr_neg"]:  adj += PD_CFG["profitability"]["rev_cagr_neg"]
+
+# 6f. Liquidity
+if flags["cr_low"]: adj += PD_CFG["liquidity"]["cr_low"]
+if flags["qr_low"]: adj += PD_CFG["liquidity"]["qr_low"]
+
+# 6g. Governance
+if flags["auditor_non_big4"]:  adj += PD_CFG["governance"]["auditor_non_big4"]
+if flags["opinion_qualified"]: adj += PD_CFG["governance"]["opinion_qualified"]
+if flags["filing_delay"]:      adj += PD_CFG["governance"]["filing_delay"]
+
+# 6h. PD sau hiệu chỉnh
+pd_adj = _sigmoid(logit0 + adj)
+
+# 6i. Áp floor/cap theo sàn
+pd_floor = PD_CFG["pd_floor"].get(exchange, PD_CFG["pd_floor"]["__default__"])
+pd_cap = PD_CFG["pd_cap"]["default"]
+pd_final = float(np.clip(pd_adj, pd_floor, pd_cap))
+
+# --- 7) Band theo policy sau hiệu chỉnh ---
+thr = thresholds_for_sector(load_thresholds("models/threshold.json"), sector_raw)
+band = classify_pd(pd_final, thr)
+
+# --- 8) Render ---
+c1, c2, c3 = st.columns([1, 1, 2])
+with c1: st.metric("PD (after multi-factor adj.)", f"{pd_final:.2%}")
 with c2: st.metric("Policy Band", band)
 with c3:
-    st.markdown(f"<span class='small'>Policy: Low &lt; {thr['low']:.0%} • Medium &lt; {thr['medium']:.0%}</span>", unsafe_allow_html=True)
-fig_g = go.Figure(go.Indicator(mode="gauge+number", value=pd_base*100,
-                               number={'suffix': "%"},
-                               gauge={'axis': {'range': [0,100]},
-                                      'bar': {'color': '#1f77b4'},
-                                      'steps': [{'range':[0,10],'color':'#E8F1FB'},
-                                                {'range':[10,30],'color':'#CFE3F7'},
-                                                {'range':[30,100],'color':'#F9E3E3'}],
-                                      'threshold': {'line': {'color':'red','width':3},'value':pd_base*100}}))
-fig_g.update_layout(height=240, margin=dict(l=10,r=10,t=10,b=10))
+    st.markdown(
+        f"<span class='small'>Policy thresholds — Low &lt; {thr['low']:.0%} • Medium &lt; {thr['medium']:.0%}  "
+        f"• Floor/Cap: {pd_floor:.0%}/{pd_cap:.0%}  • Exchange: {exchange or '-'}</span>",
+        unsafe_allow_html=True
+    )
+
+fig_g = go.Figure(go.Indicator(
+    mode="gauge+number",
+    value=pd_final * 100,
+    number={'suffix': "%"},
+    gauge={
+        'axis': {'range': [0, 100]},
+        'bar': {'color': '#1f77b4'},
+        'steps': [
+            {'range': [0, thr['low'] * 100], 'color': '#E8F1FB'},
+            {'range': [thr['low'] * 100, thr['medium'] * 100], 'color': '#CFE3F7'},
+            {'range': [thr['medium'] * 100, 100], 'color': '#F9E3E3'}
+        ],
+        'threshold': {'line': {'color': 'red', 'width': 3}, 'value': pd_final * 100}
+    }
+))
+fig_g.update_layout(height=240, margin=dict(l=10, r=10, t=10, b=10))
 st.plotly_chart(fig_g, use_container_width=True)
 
 # ===================== C) Model Explainability (SHAP) — nice chart =====================
