@@ -481,11 +481,20 @@ def scale_multiplier(factor: float, sev: float, exch_int: float) -> float:
     return factor * sev * exch_int
 
 # -------------------------------------------------------------
+# Add a slider to select the severity of the crisis
+severity_label = st.selectbox("Select Crisis Severity", ["Mild", "Moderate", "Severe"])
+severity_map = {"Mild": 0.6, "Moderate": 1.0, "Severe": 1.5}
+sev = severity_map.get(severity_label, 1.0)  # Default to moderate if not selected
+
+# Get the exchange intensity from the user or use the default based on exchange
+exch_intensity = EXCHANGE_INTENSITY.get(exchange, 1.0)  # Default value for exchange intensity
+
+# -------------------------------------------------------------
 # Run stress test and apply dynamic factors to the model input
 sector_scenarios = build_sector_scenarios(sector_raw)
 
 # Scale the crisis multipliers based on selected severity and exchange intensity
-sector_scenarios_scaled = {scenario: scale_multiplier(factor, sev, ex_intensity) 
+sector_scenarios_scaled = {scenario: scale_multiplier(factor, sev, exch_intensity) 
                            for scenario, factor in sector_scenarios.items()}
 
 # Run the scenario test and get PD (Probability of Default) values for each scenario
