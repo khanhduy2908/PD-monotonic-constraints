@@ -1,5 +1,4 @@
-# app.py — Corporate Default Risk Scoring (Bank-grade, single page)
-# ---------------------------------------------------------------
+
 import os
 import json
 import numpy as np
@@ -267,7 +266,6 @@ equity_raw = get_raw(["OWNER'S EQUITY(Bn.VND)","Equity"])
 curr_liab = get_raw(["Current liabilities (Bn. VND)","Current_Liabilities"], 0.0)
 long_liab = get_raw(["Long-term liabilities (Bn. VND)","Long_Term_Liabilities"], 0.0)
 short_bor = get_raw(["Short-term borrowings (Bn. VND)","Short_Term_Borrowings"], 0.0)
-debt_raw  = get_raw(["Total_Debt"], (curr_liab + long_liab + short_bor))
 
 revenue_raw = get_raw(["Net Sales","Revenue"])
 net_profit_raw = get_raw(["Net Profit For the Year","Net_Profit"])
@@ -278,14 +276,42 @@ receivables_raw = get_raw(["Accounts receivable (Bn. VND)","Receivables"], 0.0)
 inventories_raw = get_raw(["Net Inventories","Inventories"], 0.0)
 current_assets_raw = get_raw(["CURRENT ASSETS (Bn. VND)","Current_Assets"], 0.0)
 
-roa = (net_profit_raw / assets_raw) if (assets_raw and assets_raw != 0) else np.nan
-roe = (net_profit_raw / equity_raw) if (equity_raw and equity_raw != 0) else np.nan
-dta = (debt_raw / assets_raw) if (assets_raw and assets_raw != 0) else np.nan
-dte = (debt_raw / equity_raw) if (equity_raw and equity_raw != 0) else np.nan
-current_ratio = (current_assets_raw / curr_liab) if curr_liab else np.nan
-quick_ratio = ((cash_raw + receivables_raw) / curr_liab) if curr_liab else np.nan
-interest_coverage = (oper_profit_raw / interest_exp_raw) if interest_exp_raw else np.nan
-ebitda_to_interest = np.nan  # add if Depreciation & Amortisation available
+# --- Liability & Debt (NO double-count) ---
+# Total liabilities = Current liabilities + Long-term liabilities
+total_liab_raw = (curr_liab or 0.0) + (long_liab or 0.0)
+
+# Interest-bearing debt (proxy): Short-term borrowings + Long-term liabilities (nếu bạn có cột "Long-term borrowings" thì dùng đúng cột đó)
+interest_bearing_debt = (short_bor or 0.0) + (long_liab or 0.0)
+
+# Prefer your prepared column if present, but DO NOT add ST borrowings twice
+if "Total_Debt" in row_raw.index and pd.notna(row_raw["Total_Debt"]):
+    # nếu file bạn đã có cột Total_Debt chuẩn thì dùng nó (không sửa)
+    debt_raw = to_float(row_raw["Total_Debt"])
+else:
+    # nếu không, dùng interest-bearing debt làm đại diện
+    debt_raw = interest_bearing_debt
+
+# --- Ratios from RAW (bounded & robust) ---
+def safe_div(a, b):
+    try:
+        return (float(a) / float(b)) if (b not in [0, None, np.nan]) else np.nan
+    except Exception:
+        return np.nan
+
+roa = safe_div(net_profit_raw, assets_raw)
+roe = safe_div(net_profit_raw, equity_raw)
+
+# D/A = total liabilities / total assets (không thể > 1 về mặt hiển thị)
+dta = safe_div(total_liab_raw, assets_raw)
+if pd.notna(dta): dta = min(max(dta, 0.0), 0.999)
+
+# D/E = debt / equity (biểu diễn % theo policy UI → bound <= 1 để không vượt 100%)
+dte = safe_div(debt_raw, equity_raw)
+if pd.notna(dte): dte = min(max(dte, 0.0), 0.999)
+
+current_ratio = safe_div(current_assets_raw, curr_liab)
+quick_ratio   = safe_div((cash_raw or 0.0) + (receivables_raw or 0.0), curr_liab)
+interest_coverage  = safe_div(oper_profit_raw, interest_exp_raw)
 
 with st.sidebar:
     st.header("Company Profile")
@@ -388,68 +414,139 @@ else:
     st.dataframe(shap_df, use_container_width=True, hide_index=True)
 
 # ===================== D) Stress Testing (no baseline) =====================
+# ===== Factor libraries =====
+# Nhận diện Steel từ "Materials" hoặc "Basic Resources"
+def normalize_sector_for_factors(sector_raw: str) -> str:
+    s = (sector_raw or "").lower()
+    if "basic" in s and "resource" in s:
+        return "Steel"
+    if "material" in s or "steel" in s:
+        return "Steel"
+    return "__default__"
+
+# Sector factors: mỗi factor là dict {feature: multiplier}
+SECTOR_FACTORS = {
+    "Steel": {
+        "Demand/Supply": {
+            "Revenue_CAGR_3Y": 0.65,  # cầu giảm
+            "Asset_Turnover": 0.80,   # hiệu suất thấp
+            "EBITDA_to_Interest": 0.70,
+            "ROA": 0.85
+        },
+        "Steel Price": {
+            "Gross_Margin": 0.60,
+            "Net_Profit_Margin": 0.60,
+            "ROE": 0.85,
+            "EBITDA_to_Interest": 0.75
+        },
+        "Pandemic": {
+            "Asset_Turnover": 0.70,
+            "Receivables_Turnover": 0.70,
+            "Revenue_CAGR_3Y": 0.60
+        }
+    },
+    "__default__": {
+        "Sector Shock": { "ROA": 0.85, "EBITDA_to_Interest": 0.80, "Revenue_CAGR_3Y": 0.85 }
+    }
+}
+
+# Systemic factors
+SYSTEMIC_FACTORS = {
+    "Interest Rate +300bps": {
+        "Interest_Coverage": 0.60,
+        "EBITDA_to_Interest": 0.60,
+        "Operating_Income_to_Debt": 0.85
+    },
+    "Government Tightening": {
+        "Current_Ratio": 0.90,
+        "Quick_Ratio": 0.90,
+        "ROA": 0.90,
+        "Debt_to_Assets": 1.10
+    }
+}
+
+def apply_factor_map_once(Xrow: pd.DataFrame, factor: dict) -> pd.DataFrame:
+    X = Xrow.copy()
+    for f, mult in factor.items():
+        if f in X.columns:
+            X[f] = float(X[f].iloc[0]) * float(mult)
+    return X
+
+def run_factor_scenarios(model, Xrow_comm: pd.DataFrame, factors: dict) -> pd.DataFrame:
+    """Trả về DataFrame: Scenario, PD (đã align features)"""
+    rows = []
+    for name, fmap in factors.items():
+        Xs = apply_factor_map_once(Xrow_comm, fmap)
+        Xs = align_features_to_model(Xs, model)  # quan trọng
+        pd_val = float(model.predict_proba(Xs)[:,1][0]) if hasattr(model,"predict_proba") else float(model.predict(Xs)[0])
+        rows.append({"Scenario": name, "PD": pd_val})
+    return pd.DataFrame(rows)
+
+# ===================== D) Stress Testing (factor-level) =====================
 st.subheader("D. Stress Testing")
 
-# Reference for stress (covariance & σ)
+# Reference cho systemic & Monte Carlo
 reference = load_train_reference()
 if reference is None:
-    # dùng toàn bộ feature dataset làm baseline cho systemic/MC khi không có train_reference
     reference = feats_df.copy()
 
-# Align strictly (giữa X_base & reference)
+# Align common features giữa X_base & reference
 common_cols = [c for c in X_base.columns if c in reference.columns]
 if not common_cols:
-    # nếu reference không có cột chung (hiếm), fallback dùng chính X_base columns
     common_cols = list(X_base.columns)
 reference = reference[common_cols].copy()
 X_base_comm = X_base[common_cols].copy()
 
-# 1) Sector-specific crisis
-try:
-    X_sector = apply_sector_crisis_row(X_base_comm, sector_alias=sector_alias, exch_intensity=ex_intensity)
-    X_sector = align_features_to_model(X_sector, model)
-    pd_sector = float(model.predict_proba(X_sector)[:,1][0]) if hasattr(model,"predict_proba") else float(model.predict(X_sector)[0])
-except Exception as e:
-    st.error(f"Sector Crisis failed: {type(e).__name__} — {e}")
-    pd_sector = np.nan
+# --- Sector Factor Scenarios (Steel/Materials) ---
+sector_norm = normalize_sector_for_factors(sector_raw)
+sector_factors = SECTOR_FACTORS.get(sector_norm, SECTOR_FACTORS["__default__"])
 
-# 2) Systemic crisis (σ–based)
 try:
-    k_sys = systemic_sigma_for(sector_alias)
-    X_sys = apply_systemic_sigma_row(X_base_comm, reference_df=reference, k_sigma=k_sys)
-    X_sys = align_features_to_model(X_sys, model)
-    pd_sys = float(model.predict_proba(X_sys)[:,1][0]) if hasattr(model,"predict_proba") else float(model.predict(X_sys)[0])
+    df_sector = run_factor_scenarios(model, X_base_comm, sector_factors)
 except Exception as e:
-    st.error(f"Systemic Crisis failed: {type(e).__name__} — {e}")
-    pd_sys = np.nan
+    st.error(f"Sector factors failed: {type(e).__name__} — {e}")
+    df_sector = pd.DataFrame(columns=["Scenario","PD"])
 
-# 3) Monte Carlo CVaR 95%
+# --- Systemic Factor Scenarios ---
 try:
-    # mc_cvar_pd đã align bên trong, nhưng để chắc chắn, truyền vào X_base_comm (common features)
+    df_sys = run_factor_scenarios(model, X_base_comm, SYSTEMIC_FACTORS)
+except Exception as e:
+    st.error(f"Systemic factors failed: {type(e).__name__} — {e}")
+    df_sys = pd.DataFrame(columns=["Scenario","PD"])
+
+# --- Monte Carlo CVaR 95% ---
+try:
     mc = mc_cvar_pd(model, X_base_comm, reference_df=reference, sims=5000, alpha=0.95)
     pd_var, pd_cvar = mc["VaR"], mc["CVaR"]
 except Exception as e:
     st.error(f"Monte Carlo CVaR failed: {type(e).__name__} — {e}")
     mc = {"PD_sims": np.array([])}; pd_var = pd_cvar = np.nan
 
-# Layout: 2x2 — 2 bar charts + histogram + metrics
-a,b = st.columns(2)
-with a:
-    st.markdown(f"**Sector Crisis — {sector_alias}**")
-    figA = go.Figure()
-    figA.add_trace(go.Bar(x=[f"{sector_alias} Crisis"], y=[pd_sector]))
-    figA.update_layout(yaxis=dict(tickformat=".0%"), height=300)
-    st.plotly_chart(figA, use_container_width=True)
+# --- Plot: 2 chart song song (Sector vs Systemic) ---
+c1, c2 = st.columns(2)
 
-with b:
-    st.markdown(f"**Systemic Crisis ({k_sys:.1f}σ)**")
-    figB = go.Figure()
-    figB.add_trace(go.Bar(x=[f"Systemic {k_sys:.1f}σ"], y=[pd_sys]))
-    figB.update_layout(yaxis=dict(tickformat=".0%"), height=300)
-    st.plotly_chart(figB, use_container_width=True)
+with c1:
+    title_sector = "Sector Crisis — Steel" if sector_norm == "Steel" else "Sector Crisis"
+    if not df_sector.empty:
+        figS = go.Figure()
+        figS.add_trace(go.Bar(x=df_sector["Scenario"], y=df_sector["PD"]))
+        figS.update_layout(title=title_sector, yaxis=dict(tickformat=".0%"), height=320)
+        st.plotly_chart(figS, use_container_width=True)
+    else:
+        st.info("No sector factor PDs.")
 
-c,d = st.columns(2)
-with c:
+with c2:
+    if not df_sys.empty:
+        figY = go.Figure()
+        figY.add_trace(go.Bar(x=df_sys["Scenario"], y=df_sys["PD"]))
+        figY.update_layout(title="Systemic Crisis", yaxis=dict(tickformat=".0%"), height=320)
+        st.plotly_chart(figY, use_container_width=True)
+    else:
+        st.info("No systemic factor PDs.")
+
+# --- Bottom row: Monte Carlo histogram + metrics ---
+b1, b2 = st.columns([2,1])
+with b1:
     st.markdown("**Monte Carlo CVaR 95%**")
     if isinstance(mc.get("PD_sims"), np.ndarray) and mc["PD_sims"].size:
         hist = np.histogram(mc["PD_sims"], bins=40)
@@ -464,19 +561,11 @@ with c:
     else:
         st.info("Monte Carlo distribution unavailable.")
 
-with d:
-    st.metric("Sector Crisis PD", f"{pd_sector:.2%}" if np.isfinite(pd_sector) else "-")
-    st.metric("Systemic Crisis PD", f"{pd_sys:.2%}" if np.isfinite(pd_sys) else "-")
+with b2:
+    # hiển thị top PD theo từng khối
+    if not df_sector.empty:
+        st.metric("Max Sector PD", f"{df_sector['PD'].max():.2%}")
+    if not df_sys.empty:
+        st.metric("Max Systemic PD", f"{df_sys['PD'].max():.2%}")
     st.metric("VaR 95% (PD)", f"{pd_var:.2%}" if np.isfinite(pd_var) else "-")
     st.metric("CVaR 95% (PD)", f"{pd_cvar:.2%}" if np.isfinite(pd_cvar) else "-")
-
-# ===================== F) Executive Summary =====================
-st.subheader("F. Executive Summary")
-bullets = [
-    f"Ticker {ticker}, Year {int(year)}, Sector '{sector_raw or '-'}', Exchange '{exchange or '-'}'.",
-    f"PD: {pd_base:.2%} → Policy band: {band}.",
-    f"Under sector-specific crisis: PD = {pd_sector:.2%}. Under systemic {k_sys:.1f}σ: PD = {pd_sys:.2%}.",
-    f"Monte Carlo tail risk: VaR95 = {pd_var:.2%}, CVaR95 = {pd_cvar:.2%}."
-]
-st.write("\n".join(f"- {x}" for x in bullets))
-st.caption("© Corporate Risk Analytics — single page portal")
