@@ -416,24 +416,82 @@ pd_final = float(np.clip(_sigmoid(logit0 + adj), pd_floor, pd_cap))
 thr = thresholds_for_sector(load_thresholds("models/threshold.json"), sector_raw)
 band = classify_pd(pd_final, thr)
 
-c1,c2,c3 = st.columns([1,1,2])
-with c1: st.metric("PD (multi-factor, post-adj.)", f"{pd_final:.2%}")
-with c2: st.metric("Policy Band", band)
-with c3:
-    st.markdown(f"<span class='small'>Policy: Low &lt; {thr['low']:.0%} • Medium &lt; {thr['medium']:.0%} • "
-                f"Floor/Cap: {pd_floor:.0%}/{pd_cap:.0%} • Exchange: {exchange or '-'}</span>", unsafe_allow_html=True)
+def render_policy_band(pd_final: float, thr: dict, exchange: str):
+    low = float(thr.get("low", 0.10))
+    med = float(thr.get("medium", 0.30))
 
-gauge = go.Figure(go.Indicator(
-    mode="gauge+number", value=pd_final*100, number={'suffix': "%"},
-    gauge={'axis': {'range': [0,100]},
-           'bar': {'color': '#1f77b4'},
-           'steps': [{'range':[0,thr['low']*100],'color':'#E8F1FB'},
-                     {'range':[thr['low']*100,thr['medium']*100],'color':'#CFE3F7'},
-                     {'range':[thr['medium']*100,100],'color':'#F9E3E3'}],
-           'threshold': {'line': {'color':'red','width':3},'value':pd_final*100}}
-))
-gauge.update_layout(height=240, margin=dict(l=10,r=10,t=10,b=10))
-show_plotly(gauge, "pd_gauge")
+    # 1) Dải band chips
+    band_txt = "Low" if pd_final < low else ("Medium" if pd_final < med else "High")
+
+    c1, c2, c3 = st.columns([1,1,2])
+    with c1:
+        st.metric("PD (multi-factor, post-adj.)", f"{pd_final:.2%}")
+    with c2:
+        st.markdown(
+            f"<div style='font-size:46px; font-weight:700; line-height:1;'>"
+            f"{band_txt}</div>", unsafe_allow_html=True
+        )
+    with c3:
+        st.markdown(
+            f"<span class='small'>Policy: Low &lt; {low:.0%} • Medium &lt; {med:.0%} • "
+            f"Floor/Cap: {pd_floor:.0%}/{pd_cap:.0%} • Exchange: {exchange or '-'}</span>",
+            unsafe_allow_html=True
+        )
+
+    # 2) Thanh phân đoạn Low/Medium/High + kim PD
+    #    tính tỷ lệ mỗi đoạn theo thresholds
+    seg_low = max(min(low, 1.0), 0.0)
+    seg_med = max(min(med - low, 1.0 - seg_low), 0.0)
+    seg_high = max(1.0 - seg_low - seg_med, 0.0)
+    pd_pct = max(0.0, min(pd_final, 1.0))
+
+    st.markdown("""
+    <style>
+    .band-wrap{position:relative;height:44px;margin:8px 0 18px 0;border-radius:8px;overflow:hidden;border:1px solid #E5E7EB;}
+    .band-row{display:flex;height:100%;}
+    .seg{height:100%;}
+    .seg.low{background:#E8F1FB;}
+    .seg.med{background:#CFE3F7;}
+    .seg.high{background:#F9E3E3;}
+    .tick{position:absolute;top:-10px;height:54px;width:2px;background:#E11D48;}
+    .labels{display:flex;justify-content:space-between;font-size:12px;color:#6b7280;margin-top:-6px;}
+    </style>
+    """, unsafe_allow_html=True)
+
+    st.markdown(
+        f"""
+        <div class='band-wrap'>
+          <div class='band-row'>
+            <div class='seg low'  style='flex:{seg_low}'></div>
+            <div class='seg med'  style='flex:{seg_med}'></div>
+            <div class='seg high' style='flex:{seg_high}'></div>
+          </div>
+          <div class='tick' style='left:{pd_pct*100:.2f}%'></div>
+        </div>
+        <div class='labels'>
+          <span>0%</span><span>{low*100:.0f}%</span><span>{med*100:.0f}%</span><span>100%</span>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    # 3) Gauge bán nguyệt: giữ nguyên steps Low/Medium/High
+    fig = go.Figure(go.Indicator(
+        mode="gauge+number", value=pd_final*100, number={'suffix': "%"},
+        gauge={'axis': {'range': [0,100]},
+               'bar': {'color': '#1f77b4'},
+               'steps': [
+                    {'range':[0, low*100], 'color':'#E8F1FB'},
+                    {'range':[low*100, med*100], 'color':'#CFE3F7'},
+                    {'range':[med*100, 100], 'color':'#F9E3E3'}
+               ],
+               'threshold': {'line': {'color':'red','width':3}, 'value':pd_final*100}}
+    ))
+    fig.update_layout(height=260, margin=dict(l=10,r=10,t=10,b=10))
+    show_plotly(fig, key=f"pd_gauge_{ticker}_{year}")
+
+# GỌI HÀM RENDER
+render_policy_band(pd_final, thr, exchange)
 
 # ===================== C) SHAP (gọn, chắc) =====================
 st.subheader("C. Model Explainability (SHAP)")
