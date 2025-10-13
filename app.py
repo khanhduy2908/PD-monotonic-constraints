@@ -1,10 +1,13 @@
+# app.py — Corporate Default Risk Scoring (Single-page, Bank-grade)
+# ----------------------------------------------------------------
 import os
+import json
 import numpy as np
 import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
 
-# ==== Your utils (already present in repo) ====
+# ==== Your utils (must exist in repo) ====
 from utils.data_cleaning import clean_and_log_transform
 from utils.feature_engineering import preprocess_and_create_features
 from utils.feature_selection import select_features_for_model
@@ -22,54 +25,6 @@ h1,h2,h3 {font-weight: 650;}
 hr {margin: 0.6rem 0;}
 </style>
 """, unsafe_allow_html=True)
-
-# ====== Feature alias resolver (đảm bảo crisis thay đúng cột mô hình) ======
-FEATURE_ALIAS = {
-    "ROA": ["roa", "roa_ratio", "return_on_assets"],
-    "ROE": ["roe", "roe_ratio", "return_on_equity"],
-    "Gross_Margin": ["gross_margin", "gm", "gross_margin_ratio"],
-    "Net_Profit_Margin": ["net_profit_margin", "npm", "net_margin"],
-    "Debt_to_Assets": ["debt_to_assets", "debt_assets_ratio"],
-    "Debt_to_Equity": ["debt_to_equity", "dte", "de_ratio"],
-    "Total_Debt_to_EBITDA": ["debt_to_ebitda", "total_debt_ebitda"],
-    "Operating_Income_to_Debt": ["operating_income_to_debt", "op_income_debt"],
-    "Asset_Turnover": ["asset_turnover", "at"],
-    "Receivables_Turnover": ["receivables_turnover", "rt"],
-    "Inventory_Turnover": ["inventory_turnover", "it"],
-    "Revenue_CAGR_3Y": ["revenue_cagr_3y", "sales_cagr_3y", "rev_cagr3y"],
-    "Current_Ratio": ["current_ratio", "cr"],
-    "Quick_Ratio": ["quick_ratio", "qr"],
-    # bạn có thể bổ sung thêm alias khi biết tên cột chính xác
-}
-
-def resolve_feature_alias(X: pd.DataFrame, name: str):
-    if name in X.columns: return name
-    for alt in FEATURE_ALIAS.get(name, []):
-        if alt in X.columns: return alt
-    return None
-
-def apply_feature_multipliers_alias(Xrow: pd.DataFrame, fmap: dict) -> pd.DataFrame:
-    """Nhân các feature theo alias mapping; bỏ qua nếu không tìm thấy cột tương ứng."""
-    X = Xrow.copy()
-    for f, mult in fmap.items():
-        col = resolve_feature_alias(X, f)
-        if col is None: 
-            continue
-        try:
-            X.at[X.index[0], col] = float(X.at[X.index[0], col]) * float(mult)
-        except Exception:
-            pass
-    return X
-
-def combine_impacts(base_map: dict, sens: float = 1.0, severity: float = 1.0) -> dict:
-    """Chuẩn hoá multiplier và kẹp lại để tránh phá vỡ phân phối."""
-    out = {}
-    for k, v in base_map.items():
-        if v == 1.0:
-            out[k] = 1.0
-        else:
-            out[k] = float(np.clip(1.0 + (v - 1.0) * sens * severity, 0.5, 1.8))
-    return out
 
 # ===================== Helpers =====================
 ID_LABEL_COLS = {"Year","Ticker","Sector","Exchange","Default"}
@@ -146,7 +101,7 @@ def compute_feature_stats(df: pd.DataFrame, features: list) -> pd.DataFrame:
     stats["std"] = stats["std"].replace(0, np.nan)
     return stats
 
-# ===================== Stress testing lib (self-contained) =====================
+# ===================== Stress testing math (self-contained) =====================
 def sector_alias_map(sector_raw: str) -> str:
     s = (sector_raw or "").lower()
     if any(k in s for k in ["tech","information","software","it"]): return "Technology"
@@ -166,48 +121,57 @@ def normalize_sector_for_factors(sector_raw: str) -> str:
     if "material" in s or "steel" in s or "metal" in s: return "Steel"
     return "__default__"
 
+# Robust board mapping
 EXCHANGE_INTENSITY = {"UPCOM": 0.6, "HNX": 1.0, "HOSE": 1.0, "HSX": 1.0}
 
-# Sector factor library (example for Steel/Materials)
-SECTOR_FACTORS = {
-    "Steel": {
-        "Demand/Supply": {
-            "Revenue_CAGR_3Y": 0.65,
-            "Asset_Turnover": 0.80,
-            "EBITDA_to_Interest": 0.70,
-            "ROA": 0.85
-        },
-        "Steel Price": {
-            "Gross_Margin": 0.60,
-            "Net_Profit_Margin": 0.60,
-            "ROE": 0.85,
-            "EBITDA_to_Interest": 0.75
-        },
-        "Pandemic": {
-            "Asset_Turnover": 0.70,
-            "Receivables_Turnover": 0.70,
-            "Revenue_CAGR_3Y": 0.60
-        }
-    },
-    "__default__": {
-        "Sector Shock": { "ROA": 0.85, "EBITDA_to_Interest": 0.80, "Revenue_CAGR_3Y": 0.85 }
-    }
-}
+RISK_UP = {"Debt_to_Assets","Debt_to_Equity","Total_Debt_to_EBITDA","Net_Debt_to_Equity","Long_Term_Debt_to_Assets"}
+RISK_DOWN = {"ROA","ROE","Current_Ratio","Quick_Ratio","Operating_Income_to_Debt"}
 
-# Systemic factor library
-SYSTEMIC_FACTORS = {
-    "Interest Rate +300bps": {
-        "Interest_Coverage": 0.60,
-        "EBITDA_to_Interest": 0.60,
-        "Operating_Income_to_Debt": 0.85
-    },
-    "Government Tightening": {
-        "Current_Ratio": 0.90,
-        "Quick_Ratio": 0.90,
-        "ROA": 0.90,
-        "Debt_to_Assets": 1.10
-    }
-}
+def apply_factor_map_once(Xrow: pd.DataFrame, factor: dict) -> pd.DataFrame:
+    X = Xrow.copy()
+    for f, mult in factor.items():
+        if f in X.columns:
+            X[f] = float(X[f].iloc[0]) * float(mult)
+    return X
+
+def run_factor_scenarios(model, Xrow_comm: pd.DataFrame, factors: dict) -> pd.DataFrame:
+    rows = []
+    for name, fmap in factors.items():
+        Xs = apply_factor_map_once(Xrow_comm, fmap)
+        Xs = align_features_to_model(Xs, model)
+        pd_val = float(model.predict_proba(Xs)[:,1][0]) if hasattr(model, "predict_proba") else float(model.predict(Xs)[0])
+        rows.append({"Scenario": name, "PD": pd_val})
+    return pd.DataFrame(rows)
+
+def shrink_cov(cov: np.ndarray, alpha: float = 0.15) -> np.ndarray:
+    d = np.diag(np.diag(cov))
+    shrunk = (1 - alpha) * cov + alpha * d
+    w, V = np.linalg.eigh(shrunk)
+    w = np.clip(w, 1e-8, None)
+    return (V * w) @ V.T
+
+def mc_cvar_pd(model, Xrow: pd.DataFrame, reference_df: pd.DataFrame,
+               sims: int = 5000, alpha: float = 0.95, clip_q=(0.01,0.99)) -> dict:
+    assert Xrow.shape[0] == 1
+    cols = list(Xrow.columns)
+    ref = reference_df[cols].replace([np.inf,-np.inf], np.nan).fillna(0.0)
+    base = Xrow[cols].values.reshape(1,-1).astype(float)[0]
+    cov = np.cov(ref.values.T)
+    if not np.all(np.isfinite(cov)): cov = np.nan_to_num(cov, nan=0.0)
+    cov = shrink_cov(cov, alpha=0.15)
+    sims_mat = np.random.multivariate_normal(mean=base, cov=cov, size=sims)
+    ql = ref.quantile(clip_q[0], numeric_only=True).values
+    qh = ref.quantile(clip_q[1], numeric_only=True).values
+    sims_mat = np.minimum(np.maximum(sims_mat, ql), qh)
+    X = pd.DataFrame(sims_mat, columns=cols)
+    X = align_features_to_model(force_numeric(X), model)
+    if hasattr(model, "predict_proba"):
+        pd_sims = model.predict_proba(X)[:,1]
+    else:
+        pd_sims = model.predict(X).astype(float)
+    var = float(np.quantile(pd_sims, alpha))
+    cvar = float(pd_sims[pd_sims >= var].mean()) if (pd_sims >= var).any() else var
+    return {"PD_sims": pd_sims, "VaR": var, "CVaR": cvar}
 
 # ===================== Load data & artifacts =====================
 @st.cache_data(show_spinner=False)
@@ -227,7 +191,7 @@ def load_artifacts():
 
 # ===================== Header =====================
 st.title("Corporate Default Risk Scoring")
-st.caption("English UI • Single page • LightGBM scoring • SHAP explainability • Sector & Systemic stress • Monte Carlo CVaR")
+st.caption("English UI • Single page • LightGBM scoring • SHAP explainability • Sector vs Systemic stress • Monte Carlo CVaR")
 
 # ===================== Data init =====================
 try:
@@ -268,7 +232,28 @@ sector_raw = str(row_model.get("Sector","")) if pd.notna(row_model.get("Sector",
 sector_alias = sector_alias_map(sector_raw)
 sector_norm_for_factors = normalize_sector_for_factors(sector_raw)
 exchange = (str(row_model.get("Exchange","")) or "").upper()
-ex_intensity = EXCHANGE_INTENSITY.get(exchange, 1.0)
+
+# --- Sector bucket chuẩn hoá dùng thống nhất ---
+def _normalize_sector_bucket(s: str) -> str:
+    x = (s or "").lower()
+    if any(k in x for k in ["tech","software","it","semiconductor","internet"]): return "Technology"
+    if any(k in x for k in ["telecom","communication services","telco"]): return "Telecom"
+    if any(k in x for k in ["bank","insur","securit","financial"]): return "Financials"
+    if any(k in x for k in ["real estate","property","construction","developer"]): return "Real Estate"
+    if any(k in x for k in ["steel","material","cement","mining","basic res","chem"]): return "Materials"
+    if any(k in x for k in ["energy","oil","gas","coal","refining","petro","power gen"]): return "Energy"
+    if any(k in x for k in ["industrial","manufacturing","machinery","aviation","aerospace"]): return "Industrials"
+    if any(k in x for k in ["consumer discretionary","retail","auto","apparel","electronics retail"]): return "Consumer Discretionary"
+    if any(k in x for k in ["consumer staples","food","beverage","household","staple"]): return "Consumer Staples"
+    if any(k in x for k in ["health","pharma","biotech","medical"]): return "Healthcare"
+    if any(k in x for k in ["utility","water","electric","gas util"]): return "Utilities"
+    if any(k in x for k in ["transport","airline","airport","shipping","logistics"]): return "Transportation"
+    if any(k in x for k in ["hotel","travel","tourism","hospitality","leisure"]): return "Hospitality & Travel"
+    if any(k in x for k in ["agri","fisher","aquaculture","seafood","fishery"]): return "Agriculture & Fisheries"
+    if any(k in x for k in ["auto","oem","components"]): return "Automotive"
+    return "__default__"
+
+sector_bucket = _normalize_sector_bucket(sector_raw)
 
 # ---- Extract raw values (robust) ----
 def get_raw(col_names, default=np.nan):
@@ -286,13 +271,13 @@ short_bor = get_raw(["Short-term borrowings (Bn. VND)","Short_Term_Borrowings"],
 revenue_raw = get_raw(["Net Sales","Revenue"])
 net_profit_raw = get_raw(["Net Profit For the Year","Net_Profit"])
 oper_profit_raw = get_raw(["Operating Profit/Loss","Operating_Profit"])
-interest_exp_raw = get_raw(["Interest Expenses","Interest_Expenses"], 0.0)
+# interest_exp_raw removed from metrics (not needed)
 cash_raw = get_raw(["Cash and cash equivalents (Bn. VND)","Cash"], 0.0)
 receivables_raw = get_raw(["Accounts receivable (Bn. VND)","Receivables"], 0.0)
 inventories_raw = get_raw(["Net Inventories","Inventories"], 0.0)
 current_assets_raw = get_raw(["CURRENT ASSETS (Bn. VND)","Current_Assets"], 0.0)
 
-# ---- Debt & ratios (no double-count; bounded presentation) ----
+# ---- Debt & ratios (bounded presentation) ----
 def safe_div(a, b):
     try:
         return (float(a) / float(b)) if (b not in [0, None, np.nan]) else np.nan
@@ -310,15 +295,13 @@ roa = safe_div(net_profit_raw, assets_raw)
 roe = safe_div(net_profit_raw, equity_raw)
 
 dta = safe_div(total_liab_raw, assets_raw)
-if pd.notna(dta): dta = min(max(dta, 0.0), 0.999)  # show <= 100%
+if pd.notna(dta): dta = min(max(dta, 0.0), 0.999)
 
 dte = safe_div(debt_raw, equity_raw)
-if pd.notna(dte): dte = min(max(dte, 0.0), 0.999)  # show <= 100%
+if pd.notna(dte): dte = min(max(dte, 0.0), 0.999)
 
 current_ratio = safe_div(current_assets_raw, curr_liab)
 quick_ratio   = safe_div((cash_raw or 0.0) + (receivables_raw or 0.0), curr_liab)
-interest_coverage  = safe_div(oper_profit_raw, interest_exp_raw)
-ebitda_to_interest = np.nan  # add if Depreciation available
 
 # ---- Sidebar profile ----
 with st.sidebar:
@@ -365,28 +348,27 @@ with col1:
             legend=dict(orientation="h", yanchor="bottom", y=-0.25, xanchor="center", x=0.5),
             height=380
         )
-        st.plotly_chart(fig_rev, use_container_width=True)
+        st.plotly_chart(fig_rev, width='stretch')
     else:
         st.info("No historical series for this company.")
 
 with col2:
     fig_cap = go.Figure(data=[go.Pie(labels=["Total Debt","Equity"], values=[debt_raw, equity_raw], hole=0.5)])
     fig_cap.update_layout(title="Capital Structure", height=380)
-    st.plotly_chart(fig_cap, use_container_width=True)
+    st.plotly_chart(fig_cap, width='stretch')
 
 st.markdown("### Key Financial Ratios")
 key_ratios = pd.DataFrame({
-    "Metric": ["ROA","ROE","Debt_to_Assets","Debt_to_Equity","Current_Ratio","Quick_Ratio","Interest_Coverage","EBITDA_to_Interest"],
-    "Value": [roa, roe, dta, dte, current_ratio, quick_ratio, interest_coverage, ebitda_to_interest]
+    "Metric": ["ROA","ROE","Debt_to_Assets","Debt_to_Equity","Current_Ratio","Quick_Ratio"],
+    "Value": [roa, roe, dta, dte, current_ratio, quick_ratio]
 })
 key_ratios["Value"] = key_ratios["Value"].apply(fmt_ratio)
-st.dataframe(key_ratios, use_container_width=True, hide_index=True)
+st.dataframe(key_ratios, use_container_width=True, hide_index=True)  # dataframe UI vẫn OK
 
 # ===================== B) Default Probability (PD) & Policy (Multi-factor) =====================
 st.subheader("B. Default Probability (PD) & Policy Band")
 
-# --- Helpers ---
-def _sigmoid(z): 
+def _sigmoid(z):
     z = float(z)
     if z >= 35: return 1.0
     if z <= -35: return 0.0
@@ -396,39 +378,31 @@ def _logit(p, eps=1e-9):
     p = float(np.clip(p, eps, 1 - eps))
     return np.log(p / (1 - p))
 
-def _safe(v): 
+def _safe(v):
     try:
         return float(v) if pd.notna(v) else np.nan
     except Exception:
         return np.nan
 
-# --- 1) PD gốc từ model (không hiệu chỉnh) ---
+# 1) PD gốc từ model
 if hasattr(model, "predict_proba"):
     pd_base = float(model.predict_proba(X_base)[:, 1][0])
 else:
     pd_base = float(model.predict(X_base)[0])
 
-# --- 2) Tải cấu hình trọng số (nếu không có file thì dùng default) ---
+# 2) Cấu hình hậu-hiệu chỉnh PD (có thể đặt file models/pd_adjustments.json để override)
 DEFAULT_PD_CFG = {
-    # Hệ số cộng vào LOG-ODDS (tức là linear trên logit), có thể âm/dương
-    # A. Listing board / liquidity premium (UPCoM cao nhất)
     "exchange_logit_mult": {"UPCOM": 0.40, "HNX": 0.18, "HOSE": 0.00, "HSX": 0.00, "__default__": 0.10},
-    # B. Quy mô (size): nhỏ rủi ro hơn
     "size": {"assets_q40": 0.20, "revenue_q40": 0.10},
-    # C. Đòn bẩy & cấu trúc vốn
     "leverage": {"dta_hi": 0.25, "dte_hi": 0.20, "netde_hi": 0.15},
-    # D. Lợi nhuận & tăng trưởng
     "profitability": {"roa_neg": 0.25, "roe_neg": 0.20, "npm_neg": 0.15, "rev_cagr_neg": 0.10},
-    # E. Thanh khoản ngắn hạn
     "liquidity": {"cr_low": 0.12, "qr_low": 0.08},
-    # F. Governance / chất lượng BCTC
     "governance": {"auditor_non_big4": 0.10, "opinion_qualified": 0.30, "filing_delay": 0.12},
-    # G. Sector tilt (một số nhóm vốn có PD nền cao hơn)
+    # sector tilt (nâng cấp như bạn gợi ý)
     "sector_tilt": {
-        "Real Estate": 0.15, "Materials": 0.08, "Energy": 0.08,
-        "Financials": 0.00, "Technology": -0.02, "__default__": 0.00
+        "Real Estate": 0.20, "Materials": 0.10, "Consumer Discretionary": 0.05,
+        "Financials": 0.00, "Utilities": -0.05, "Technology": -0.02, "__default__": 0.00
     },
-    # H. Giới hạn floor/ceiling theo sàn (đảm bảo phản ánh rủi ro tối thiểu)
     "pd_floor": {"UPCOM": 0.06, "HNX": 0.04, "HOSE": 0.02, "HSX": 0.02, "__default__": 0.03},
     "pd_cap":   {"default": 0.60}
 }
@@ -441,15 +415,12 @@ def load_pd_cfg(path="models/pd_adjustments.json"):
         pass
     return DEFAULT_PD_CFG
 
-import json
 PD_CFG = load_pd_cfg()
 
-# --- 3) Truy xuất tín hiệu rủi ro từ hàng đã chọn (không dùng Interest_Coverage / EBITDA_to_Interest) ---
-# Dùng giá trị raw đã lấy ở phần trên: assets_raw, revenue_raw, roa, roe, dta, dte, current_ratio, quick_ratio, ...
-# Thêm một số cột tùy chọn nếu có trong raw_df: 'Auditor', 'Audit_Opinion', 'Filing_Delay_Days', 'Net_Debt_to_Equity', 'Net_Profit_Margin', 'Revenue_CAGR_3Y'
+# 3) Tín hiệu rủi ro từ row (không dùng Interest_Coverage/EBITDA_to_Interest)
 def _from_row(series, keys, default=np.nan):
     for k in keys:
-        if k in series.index and pd.notna(series.get(k)): 
+        if k in series.index and pd.notna(series.get(k)):
             return _safe(series.get(k))
     return default
 
@@ -460,9 +431,10 @@ auditor = str(_from_row(row_raw, ["Auditor","Audit_Firm","Auditor_Name"], "") or
 opinion = str(_from_row(row_raw, ["Audit_Opinion","Opinion"], "") or "")
 filing_delay = _from_row(row_raw, ["Filing_Delay_Days","Filing_Delay"], np.nan)
 
-# --- 4) Ngưỡng tham chiếu từ bộ train (phân vị theo toàn tập) ---
+# 4) Phân vị làm mốc size từ tập train
 ref = load_train_reference()
 ref_use = ref if isinstance(ref, pd.DataFrame) else feats_df
+
 def _q(col, q, fallback=np.nan):
     if (col in ref_use.columns) and ref_use[col].notna().any():
         try: return float(ref_use[col].quantile(q))
@@ -472,137 +444,100 @@ def _q(col, q, fallback=np.nan):
 assets_q40 = _q("Total_Assets", 0.40, np.nan) if "Total_Assets" in ref_use.columns else np.nan
 revenue_q40 = _q("Revenue", 0.40, np.nan) if "Revenue" in ref_use.columns else np.nan
 
-# --- 5) Dựng các cờ tín hiệu (booleans) ---
 flags = {
-    # Exchange premium
     "exch_mult": PD_CFG["exchange_logit_mult"].get(exchange, PD_CFG["exchange_logit_mult"]["__default__"]),
-    # Size
     "assets_q40": (assets_raw is not None and np.isfinite(_safe(assets_raw)) and np.isfinite(assets_q40) and float(assets_raw) < assets_q40),
     "revenue_q40": (revenue_raw is not None and np.isfinite(_safe(revenue_raw)) and np.isfinite(revenue_q40) and float(revenue_raw) < revenue_q40),
-    # Leverage
     "dta_hi": (isinstance(dta, float) and dta > 0.65),
     "dte_hi": (isinstance(dte, float) and dte > 1.0),
     "netde_hi": (isinstance(nde, float) and nde > 0.8),
-    # Profitability & growth
     "roa_neg": (isinstance(roa, float) and roa < 0.0),
     "roe_neg": (isinstance(roe, float) and roe < 0.0),
     "npm_neg": (isinstance(npm, float) and npm < 0.0),
     "rev_cagr_neg": (isinstance(rev_cagr3y, float) and rev_cagr3y < 0.0),
-    # Liquidity
     "cr_low": (isinstance(current_ratio, float) and current_ratio < 1.0),
     "qr_low": (isinstance(quick_ratio, float) and quick_ratio < 0.8),
-    # Governance
     "auditor_non_big4": (auditor != "" and not any(k in auditor.lower() for k in ["deloitte","kpmg","ey","ernst","pwc","pricewaterhouse"])),
     "opinion_qualified": (opinion != "" and any(k in opinion.lower() for k in ["qualified","adverse","disclaimer"])),
-    "filing_delay": (isinstance(filing_delay, float) and filing_delay >= 20),  # nộp chậm > ~3 tuần
+    "filing_delay": (isinstance(filing_delay, float) and filing_delay >= 20),
 }
 
-# --- 6) Log-odds adjustment tổng hợp (đa yếu tố) ---
 logit0 = _logit(pd_base)
 adj = 0.0
-
-# 6a. Exchange
+# Exchange premium
 adj += flags["exch_mult"]
-
-# 6b. Sector tilt
-adj += PD_CFG["sector_tilt"].get(sector_alias, PD_CFG["sector_tilt"].get(sector_bucket, PD_CFG["sector_tilt"]["__default__"]))
-
-# 6c. Size
+# Sector tilt — ưu tiên bucket (nếu không có thì dùng alias, rồi default)
+adj += PD_CFG["sector_tilt"].get(sector_bucket, PD_CFG["sector_tilt"].get(sector_alias, PD_CFG["sector_tilt"]["__default__"]))
+# Size
 if flags["assets_q40"]:  adj += PD_CFG["size"]["assets_q40"]
 if flags["revenue_q40"]: adj += PD_CFG["size"]["revenue_q40"]
-
-# 6d. Leverage
+# Leverage
 if flags["dta_hi"]:  adj += PD_CFG["leverage"]["dta_hi"]
 if flags["dte_hi"]:  adj += PD_CFG["leverage"]["dte_hi"]
 if flags["netde_hi"]: adj += PD_CFG["leverage"]["netde_hi"]
-
-# 6e. Profitability & growth
+# Profitability & growth
 if flags["roa_neg"]:       adj += PD_CFG["profitability"]["roa_neg"]
 if flags["roe_neg"]:       adj += PD_CFG["profitability"]["roe_neg"]
 if flags["npm_neg"]:       adj += PD_CFG["profitability"]["npm_neg"]
 if flags["rev_cagr_neg"]:  adj += PD_CFG["profitability"]["rev_cagr_neg"]
-
-# 6f. Liquidity
+# Liquidity
 if flags["cr_low"]: adj += PD_CFG["liquidity"]["cr_low"]
 if flags["qr_low"]: adj += PD_CFG["liquidity"]["qr_low"]
-
-# 6g. Governance
+# Governance
 if flags["auditor_non_big4"]:  adj += PD_CFG["governance"]["auditor_non_big4"]
 if flags["opinion_qualified"]: adj += PD_CFG["governance"]["opinion_qualified"]
 if flags["filing_delay"]:      adj += PD_CFG["governance"]["filing_delay"]
 
-# 6h. PD sau hiệu chỉnh
 pd_adj = _sigmoid(logit0 + adj)
-
-# 6i. Áp floor/cap theo sàn
 pd_floor = PD_CFG["pd_floor"].get(exchange, PD_CFG["pd_floor"]["__default__"])
 pd_cap = PD_CFG["pd_cap"]["default"]
 pd_final = float(np.clip(pd_adj, pd_floor, pd_cap))
 
-# --- 7) Band theo policy sau hiệu chỉnh ---
 thr = thresholds_for_sector(load_thresholds("models/threshold.json"), sector_raw)
 band = classify_pd(pd_final, thr)
 
-# --- 8) Render ---
-c1, c2, c3 = st.columns([1, 1, 2])
-with c1: st.metric("PD (after multi-factor adj.)", f"{pd_final:.2%}")
+c1,c2,c3 = st.columns([1,1,2])
+with c1: st.metric("PD (multi-factor adj.)", f"{pd_final:.2%}")
 with c2: st.metric("Policy Band", band)
 with c3:
     st.markdown(
-        f"<span class='small'>Policy thresholds — Low &lt; {thr['low']:.0%} • Medium &lt; {thr['medium']:.0%}  "
-        f"• Floor/Cap: {pd_floor:.0%}/{pd_cap:.0%}  • Exchange: {exchange or '-'}</span>",
-        unsafe_allow_html=True
+        f"<span class='small'>Policy: Low &lt; {thr['low']:.0%} • Medium &lt; {thr['medium']:.0%} • "
+        f"Floor/Cap: {pd_floor:.0%}/{pd_cap:.0%} • Exchange: {exchange or '-'}</span>", unsafe_allow_html=True
     )
 
 fig_g = go.Figure(go.Indicator(
-    mode="gauge+number",
-    value=pd_final * 100,
-    number={'suffix': "%"},
-    gauge={
-        'axis': {'range': [0, 100]},
-        'bar': {'color': '#1f77b4'},
-        'steps': [
-            {'range': [0, thr['low'] * 100], 'color': '#E8F1FB'},
-            {'range': [thr['low'] * 100, thr['medium'] * 100], 'color': '#CFE3F7'},
-            {'range': [thr['medium'] * 100, 100], 'color': '#F9E3E3'}
-        ],
-        'threshold': {'line': {'color': 'red', 'width': 3}, 'value': pd_final * 100}
-    }
+    mode="gauge+number", value=pd_final*100, number={'suffix': "%"},
+    gauge={'axis': {'range': [0,100]},
+           'bar': {'color': '#1f77b4'},
+           'steps': [{'range':[0,thr['low']*100],'color':'#E8F1FB'},
+                     {'range':[thr['low']*100,thr['medium']*100],'color':'#CFE3F7'},
+                     {'range':[thr['medium']*100,100],'color':'#F9E3E3'}],
+           'threshold': {'line': {'color':'red','width':3},'value':pd_final*100}}
 ))
-fig_g.update_layout(height=240, margin=dict(l=10, r=10, t=10, b=10))
-st.plotly_chart(fig_g, use_container_width=True)
+fig_g.update_layout(height=240, margin=dict(l=10,r=10,t=10,b=10))
+st.plotly_chart(fig_g, width='stretch')
 
 # ===================== C) Model Explainability (SHAP) — nice chart =====================
 st.subheader("C. Model Explainability (SHAP)")
 
 try:
-    shap_df = explain_shap(model, X_base, top_n=10)  # expected columns: Feature, SHAP (hoặc Impact)
+    shap_df = explain_shap(model, X_base, top_n=10)
     if "Impact" in shap_df.columns and "SHAP" not in shap_df.columns:
-        shap_df = shap_df.rename(columns={"Impact": "SHAP"})
+        shap_df = shap_df.rename(columns={"Impact":"SHAP"})
 except Exception:
     shap_df = pd.DataFrame()
 
-# Chuẩn hoá nhãn “key financial ratio” cho đẹp
 DISPLAY_LABEL = {
-    "roa": "ROA (Return on Assets)",
-    "roa_ratio": "ROA (Return on Assets)",
-    "roe": "ROE (Return on Equity)",
-    "roe_ratio": "ROE (Return on Equity)",
-    "debt_to_assets": "Debt / Assets",
-    "debt_assets_ratio": "Debt / Assets",
-    "debt_to_equity": "Debt / Equity",
-    "de_ratio": "Debt / Equity",
-    "gross_margin": "Gross Margin",
-    "net_profit_margin": "Net Profit Margin",
-    "current_ratio": "Current Ratio",
-    "quick_ratio": "Quick Ratio",
-    "asset_turnover": "Asset Turnover",
-    "inventory_turnover": "Inventory Turnover",
+    "roa": "ROA (Return on Assets)", "roa_ratio": "ROA (Return on Assets)",
+    "roe": "ROE (Return on Equity)", "roe_ratio": "ROE (Return on Equity)",
+    "debt_to_assets": "Debt / Assets", "debt_assets_ratio": "Debt / Assets",
+    "debt_to_equity": "Debt / Equity", "de_ratio": "Debt / Equity",
+    "gross_margin": "Gross Margin", "net_profit_margin": "Net Profit Margin",
+    "current_ratio": "Current Ratio", "quick_ratio": "Quick Ratio",
+    "asset_turnover": "Asset Turnover", "inventory_turnover": "Inventory Turnover",
     "receivables_turnover": "Receivables Turnover",
     "revenue_cagr_3y": "Revenue CAGR (3Y)",
-    # fallback giữ nguyên
 }
-
 def beautify_label(x: str) -> str:
     key = (x or "").strip()
     low = key.lower()
@@ -611,7 +546,6 @@ def beautify_label(x: str) -> str:
 if shap_df.empty:
     st.info("SHAP is not available for this model/input.")
 else:
-    # Bar ngang đẹp: SHAP tuyệt đối để xếp hạng, màu theo dấu
     shap_df["absSHAP"] = shap_df["SHAP"].abs()
     shap_df = shap_df.sort_values("absSHAP", ascending=True).tail(10)
     shap_df["Label"] = shap_df["Feature"].apply(beautify_label)
@@ -629,35 +563,60 @@ else:
         xaxis=dict(title="SHAP value → PD"),
         height=420, margin=dict(l=10, r=20, t=40, b=10)
     )
-    st.plotly_chart(fig_sh, use_container_width=True)
+    st.plotly_chart(fig_sh, width='stretch')
 
-# ===================== D. Stress Testing — 4 panels with alias mapping =====================
+# ===================== D) Stress Testing — 4 panels (Sector vs Systemic) =====================
 st.subheader("D. Stress Testing — Sector & Systemic Impacts")
 
-# 1) Sector bucket auto-map (đồng bộ tên ngành gốc)
-def _normalize_sector_bucket(s: str) -> str:
-    x = (s or "").lower()
-    if any(k in x for k in ["tech","software","it","semiconductor","internet"]): return "Technology"
-    if any(k in x for k in ["telecom","communication services","telco"]): return "Telecom"
-    if any(k in x for k in ["bank","insur","securit","financial"]): return "Financials"
-    if any(k in x for k in ["real estate","property","construction","developer"]): return "Real Estate"
-    if any(k in x for k in ["steel","material","cement","mining","basic res","chem"]): return "Materials"
-    if any(k in x for k in ["energy","oil","gas","coal","refining","petro","power gen"]): return "Energy"
-    if any(k in x for k in ["industrial","manufacturing","machinery","aviation","aerospace"]): return "Industrials"
-    if any(k in x for k in ["consumer discretionary","retail","auto","apparel","electronics retail"]): return "Consumer Discretionary"
-    if any(k in x for k in ["consumer staples","food","beverage","household","staple"]): return "Consumer Staples"
-    if any(k in x for k in ["health","pharma","biotech","medical"]): return "Healthcare"
-    if any(k in x for k in ["utility","water","electric","gas util"]): return "Utilities"
-    if any(k in x for k in ["transport","airline","airport","shipping","logistics"]): return "Transportation"
-    if any(k in x for k in ["hotel","travel","tourism","hospitality","leisure"]): return "Hospitality & Travel"
-    if any(k in x for k in ["agri","fisher","aquaculture","seafood","fishery"]): return "Agriculture & Fisheries"
-    if any(k in x for k in ["auto","oem","components"]): return "Automotive"
-    return "__default__"
+# --- Feature alias resolver (đảm bảo multiplier chạm đúng cột mô hình) ---
+FEATURE_ALIAS = {
+    "ROA": ["roa","roa_ratio","return_on_assets"],
+    "ROE": ["roe","roe_ratio","return_on_equity"],
+    "Gross_Margin": ["gross_margin","gm","gross_margin_ratio"],
+    "Net_Profit_Margin": ["net_profit_margin","npm","net_margin"],
+    "Debt_to_Assets": ["debt_to_assets","debt_assets_ratio"],
+    "Debt_to_Equity": ["debt_to_equity","dte","de_ratio"],
+    "Total_Debt_to_EBITDA": ["debt_to_ebitda","total_debt_ebitda"],
+    "Operating_Income_to_Debt": ["operating_income_to_debt","op_income_debt"],
+    "Asset_Turnover": ["asset_turnover","at"],
+    "Receivables_Turnover": ["receivables_turnover","rt"],
+    "Inventory_Turnover": ["inventory_turnover","it"],
+    "Revenue_CAGR_3Y": ["revenue_cagr_3y","sales_cagr_3y","rev_cagr3y"],
+    "Current_Ratio": ["current_ratio","cr"],
+    "Quick_Ratio": ["quick_ratio","qr"],
+}
 
-sector_bucket = _normalize_sector_bucket(sector_raw)
-st.markdown(f"<span class='small'>Sector (raw): <b>{sector_raw or '-'}</b> → Bucket: <b>{sector_bucket}</b></span>", unsafe_allow_html=True)
+def resolve_feature_alias(X: pd.DataFrame, name: str):
+    if name in X.columns: return name
+    for alt in FEATURE_ALIAS.get(name, []):
+        if alt in X.columns: return alt
+    return None
 
-# 2) Crisis catalogs (đÃ LOẠI bỏ Interest_Coverage & EBITDA_to_Interest)
+def apply_feature_multipliers_alias(Xrow: pd.DataFrame, fmap: dict) -> pd.DataFrame:
+    X = Xrow.copy()
+    for f, mult in fmap.items():
+        col = resolve_feature_alias(X, f)
+        if col is None: 
+            continue
+        try:
+            X.at[X.index[0], col] = float(X.at[X.index[0], col]) * float(mult)
+        except Exception:
+            pass
+    return X
+
+def combine_impacts(base_map: dict, sens: float = 1.0, severity: float = 1.0) -> dict:
+    out = {}
+    for k, v in base_map.items():
+        if v == 1.0: out[k] = 1.0
+        else: out[k] = float(np.clip(1.0 + (v - 1.0) * sens * severity, 0.5, 1.8))
+    return out
+
+def _pd_from_row(model, Xrow: pd.DataFrame) -> float:
+    Xr = align_features_to_model(Xrow, model)
+    if hasattr(model, "predict_proba"): return float(model.predict_proba(Xr)[:,1][0])
+    return float(model.predict(Xr)[0])
+
+# --- Catalogs (đÃ LOẠI Interest_Coverage / EBITDA_to_Interest) ---
 SECTOR_CRISIS_CATALOG = {
     "COVID-19 Pandemic (2020–2021)": {
         "base_impacts": {
@@ -720,12 +679,7 @@ SYSTEMIC_SHOCKS = {
     }
 }
 
-def _pd_from_row(model, Xrow: pd.DataFrame) -> float:
-    Xr = align_features_to_model(Xrow, model)
-    if hasattr(model, "predict_proba"): return float(model.predict_proba(Xr)[:,1][0])
-    return float(model.predict(Xr)[0])
-
-# Baseline
+# Baseline for stress
 pd_base_for_stress = _pd_from_row(model, X_base)
 
 # Sector impacts
@@ -767,7 +721,7 @@ with c1:
         fig_sector.update_layout(title=f"Sector Impact — ΔPD vs Baseline (%)  ·  Bucket: {sector_bucket}",
                                  yaxis=dict(title="Impact (%)"),
                                  height=360, margin=dict(l=10, r=10, t=40, b=80))
-        st.plotly_chart(fig_sector, use_container_width=True)
+        st.plotly_chart(fig_sector, width='stretch')
     else:
         st.info("No sector crisis impact computed.")
 
@@ -782,16 +736,15 @@ with c2:
         fig_sys.update_layout(title="Systemic Impact — ΔPD vs Baseline (%)",
                               yaxis=dict(title="Impact (%)"),
                               height=360, margin=dict(l=10, r=10, t=40, b=80))
-        st.plotly_chart(fig_sys, use_container_width=True)
+        st.plotly_chart(fig_sys, width='stretch')
     else:
         st.info("No systemic impact computed.")
 
 c3, c4 = st.columns(2)
 with c3:
-    # Tái sử dụng fig_sh ở phần C nếu muốn nhúng luôn tại đây, hoặc chỉ hiện lại top-6
     try:
         if not shap_df.empty:
-            st.plotly_chart(fig_sh, use_container_width=True)
+            st.plotly_chart(fig_sh, width='stretch')
         else:
             st.info("SHAP is not available for this model/input.")
     except Exception:
@@ -806,12 +759,16 @@ with c4:
         fig_mc.update_layout(title="Monte Carlo — PD sims (VaR 95% orange, CVaR 95% red)",
                              xaxis_title="PD", yaxis_title="Count",
                              height=360, margin=dict(l=10, r=10, t=40, b=40))
-        st.plotly_chart(fig_mc, use_container_width=True)
+        st.plotly_chart(fig_mc, width='stretch')
     else:
         st.info("Monte Carlo distribution unavailable.")
 
 # KPIs
 k1, k2, k3 = st.columns(3)
-with k1: st.metric("Baseline PD (adj in Section B)", f"{pd_final:.2%}")
+with k1: st.metric("Baseline PD (post-adj in B)", f"{pd_final:.2%}")
 with k2: st.metric("Max PD (Sector/Systemic)", f"{max(df_sector['PD'].max() if not df_sector.empty else 0.0, df_sys['PD'].max() if not df_sys.empty else 0.0):.2%}")
 with k3: st.metric("CVaR 95% (PD)", f"{pd_cvar:.2%}" if np.isfinite(pd_cvar) else "-")
+
+st.caption("Notes: PD is model-based with multi-factor log-odds adjustments (exchange, size, leverage, profitability, liquidity, governance, sector tilt). "
+           "Stress impacts use alias-mapped feature multipliers; unknown columns are skipped safely. "
+           "Coverage ratios (Interest_Coverage, EBITDA_to_Interest) have been removed from scenarios as requested.")
