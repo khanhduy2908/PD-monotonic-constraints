@@ -371,18 +371,18 @@ if shap_df.empty:
 else:
     st.dataframe(shap_df, use_container_width=True, hide_index=True)
 
-# ===================== D) Stress Testing — Dark, no controls =====================
-st.subheader("D. Stress Testing — Real-world Crises by Sector (No controls)")
+# ===================== D) Stress Testing — 4-panels (Sector vs Systemic) =====================
+st.subheader("D. Stress Testing — Sector & Systemic Impacts")
 
-# --- sector bucket (bám theo mapping rộng) ---
-def sector_normalize(s: str) -> str:
+# --------- Sector bucket (auto-sync from dataset) ----------
+def _normalize_sector_bucket(s: str) -> str:
     x = (s or "").lower()
     if any(k in x for k in ["tech","software","it","semiconductor","internet"]): return "Technology"
     if any(k in x for k in ["telecom","communication services","telco"]): return "Telecom"
-    if any(k in x for k in ["bank","securit","insur","financial"]): return "Financials"
+    if any(k in x for k in ["bank","insur","securit","financial"]): return "Financials"
     if any(k in x for k in ["real estate","property","construction","developer"]): return "Real Estate"
-    if any(k in x for k in ["steel","material","cement","mining","basic resources","chem"]): return "Materials"
-    if any(k in x for k in ["energy","oil","gas","coal","refining","power gen"]): return "Energy"
+    if any(k in x for k in ["steel","material","cement","mining","basic res","chem"]): return "Materials"
+    if any(k in x for k in ["energy","oil","gas","coal","refining","petro","power gen"]): return "Energy"
     if any(k in x for k in ["industrial","manufacturing","machinery","aviation","aerospace"]): return "Industrials"
     if any(k in x for k in ["consumer discretionary","retail","auto","apparel","electronics retail"]): return "Consumer Discretionary"
     if any(k in x for k in ["consumer staples","food","beverage","household","staple"]): return "Consumer Staples"
@@ -394,110 +394,113 @@ def sector_normalize(s: str) -> str:
     if any(k in x for k in ["auto","oem","components"]): return "Automotive"
     return "__default__"
 
-sector_bucket = sector_normalize(sector_raw)
+sector_bucket = _normalize_sector_bucket(sector_raw)
+st.markdown(f"<span class='small'>Sector (raw): <b>{sector_raw or '-'}</b> → Bucket: <b>{sector_bucket}</b></span>", unsafe_allow_html=True)
 
-# --- Crisis catalog (giữ nguyên từ block trước) ---
-CRISIS_CATALOG = {
-    "COVID-19 Pandemic (2020-2021)": {
-        "desc": "Mobility collapse; airlines/hospitality hit; oil demand down.",
-        "base_impacts": {
-            "Net_Profit_Margin": 0.85, "Gross_Margin": 0.90, "ROA": 0.85, "ROE": 0.85,
-            "Interest_Coverage": 0.70, "EBITDA_to_Interest": 0.75, "Current_Ratio": 0.95, "Quick_Ratio": 0.95,
-            "Debt_to_Assets": 1.05, "Debt_to_Equity": 1.05, "Total_Debt_to_EBITDA": 1.15,
-            "Asset_Turnover": 0.90, "Receivables_Turnover": 0.90, "Inventory_Turnover": 0.85,
-            "Revenue_CAGR_3Y": 0.85
-        },
-        "sector_sensitivity": {"Transportation":1.8,"Hospitality & Travel":1.8,"Energy":1.3,
-                               "Consumer Discretionary":1.2,"Industrials":1.2,"__default__":1.0}
-    },
-    "Global Financial Crisis (2008-2009)": {
-        "desc": "Credit crunch; real estate & financials deeply affected.",
-        "base_impacts": {
-            "Net_Profit_Margin":0.90,"ROA":0.90,"ROE":0.88,
-            "Interest_Coverage":0.75,"EBITDA_to_Interest":0.80,
-            "Current_Ratio":0.95,"Quick_Ratio":0.95,
-            "Debt_to_Assets":1.10,"Operating_Income_to_Debt":0.85,
-            "Revenue_CAGR_3Y":0.90
-        },
-        "sector_sensitivity":{"Financials":1.6,"Real Estate":1.5,"Materials":1.2,"Industrials":1.2,"__default__":1.0}
+# --------- Catalogs: Sector crises vs Systemic shocks ----------
+SECTOR_CRISIS_CATALOG = {
+    # sector-specific, evidence-informed
+    "COVID-19 Pandemic (2020–2021)": {
+        "base_impacts": {"Net_Profit_Margin":0.85,"Gross_Margin":0.90,"ROA":0.85,"ROE":0.85,
+                         "Interest_Coverage":0.70,"EBITDA_to_Interest":0.75,"Current_Ratio":0.95,"Quick_Ratio":0.95,
+                         "Debt_to_Assets":1.05,"Debt_to_Equity":1.05,"Total_Debt_to_EBITDA":1.15,
+                         "Asset_Turnover":0.90,"Receivables_Turnover":0.90,"Inventory_Turnover":0.85,
+                         "Revenue_CAGR_3Y":0.85},
+        "sector_sensitivity":{"Transportation":1.8,"Hospitality & Travel":1.8,"Energy":1.3,
+                              "Consumer Discretionary":1.2,"Industrials":1.2,"__default__":1.0}
     },
     "US–China Tariffs (2018–2019; 2025 updates)": {
-        "desc":"Section 232/301; cost friction in metals, electronics, apparel, machinery.",
         "base_impacts":{"Gross_Margin":0.95,"Net_Profit_Margin":0.93,
                         "Asset_Turnover":0.97,"Receivables_Turnover":0.95,"Inventory_Turnover":0.93,
                         "Debt_to_Assets":1.05,"Debt_to_Equity":1.05},
         "sector_sensitivity":{"Materials":1.5,"Technology":1.2,"Consumer Discretionary":1.2,"Industrials":1.2,"__default__":1.0}
     },
+    "Supply Chain Disruptions (2021–2022)": {
+        "base_impacts":{"Inventory_Turnover":0.85,"Receivables_Turnover":0.92,"Asset_Turnover":0.93,
+                        "Revenue_CAGR_3Y":0.92,"Gross_Margin":0.95},
+        "sector_sensitivity":{"Technology":1.3,"Automotive":1.4,"Industrials":1.2,"Consumer Discretionary":1.2,"__default__":1.0}
+    },
     "Energy Price Shock (Europe 2022)": {
-        "desc":"Record gas/power prices; input costs squeeze margins/liquidity.",
         "base_impacts":{"Gross_Margin":0.92,"Net_Profit_Margin":0.90,"ROA":0.92,
                         "Current_Ratio":0.93,"Quick_Ratio":0.93,
                         "Interest_Coverage":0.85,"EBITDA_to_Interest":0.88},
         "sector_sensitivity":{"Materials":1.3,"Industrials":1.3,"Consumer Staples":1.2,"Utilities":1.2,"__default__":1.0}
     },
-    "Supply Chain Disruptions (2021–2022)": {
-        "desc":"Port congestion, chip shortage; inventories up, turnover down.",
-        "base_impacts":{"Inventory_Turnover":0.85,"Receivables_Turnover":0.92,"Asset_Turnover":0.93,
-                        "Revenue_CAGR_3Y":0.92,"Gross_Margin":0.95},
-        "sector_sensitivity":{"Technology":1.3,"Automotive":1.4,"Industrials":1.2,"Consumer Discretionary":1.2,"__default__":1.0}
-    },
     "Tech Valuation Reset (2022–2023)": {
-        "desc":"Fast rate hikes → higher cost of capital; margin compression.",
-        "base_impacts":{"Net_Profit_Margin":0.95,"ROE":0.93,"ROA":0.95,
-                        "Interest_Coverage":0.90,"EBITDA_to_Interest":0.92},
+        "base_impacts":{"Net_Profit_Margin":0.95,"ROE":0.93,"ROA":0.95,"Interest_Coverage":0.90,"EBITDA_to_Interest":0.92},
         "sector_sensitivity":{"Technology":1.5,"__default__":1.0}
     },
     "Oil Demand Crash (2020)": {
-        "desc":"IEA: record oil demand fall; energy & logistics hit.",
         "base_impacts":{"Gross_Margin":0.92,"Net_Profit_Margin":0.88,"ROA":0.90,"ROE":0.90,
                         "Interest_Coverage":0.80,"EBITDA_to_Interest":0.82},
         "sector_sensitivity":{"Energy":1.6,"Transportation":1.3,"__default__":1.0}
     }
 }
 
-def combine_impacts(base_map: dict, sens: float, severity: float = 1.0) -> dict:
+SYSTEMIC_SHOCKS = {
+    # cross-sector macro/financial conditions
+    "Global Financial Crisis (2008–2009)": {
+        "impacts":{"Net_Profit_Margin":0.90,"ROA":0.90,"ROE":0.88,
+                   "Interest_Coverage":0.75,"EBITDA_to_Interest":0.80,
+                   "Current_Ratio":0.95,"Quick_Ratio":0.95,
+                   "Debt_to_Assets":1.10,"Operating_Income_to_Debt":0.85,
+                   "Revenue_CAGR_3Y":0.90}
+    },
+    "Interest Rate +300bps": {
+        "impacts":{"Interest_Coverage":0.60,"EBITDA_to_Interest":0.60,"Operating_Income_to_Debt":0.85,
+                   "Debt_to_Equity":1.10,"Debt_to_Assets":1.05}
+    },
+    "Government Tightening": {
+        "impacts":{"Current_Ratio":0.90,"Quick_Ratio":0.90,"ROA":0.90,"Debt_to_Assets":1.10}
+    },
+    "Market Liquidity Crisis": {
+        "impacts":{"Interest_Coverage":0.85,"Revenue_CAGR_3Y":0.95,"Net_Profit_Margin":0.92}
+    }
+}
+
+def _combine_impacts(base_map: dict, sens: float = 1.0, severity: float = 1.0) -> dict:
     out = {}
     for k, v in base_map.items():
-        if v == 1.0:
-            out[k] = 1.0
-            continue
-        dist = (v - 1.0)
-        out[k] = 1.0 + dist * sens * severity
+        if v == 1.0: out[k] = 1.0; continue
+        out[k] = 1.0 + (v - 1.0) * sens * severity
         out[k] = float(np.clip(out[k], 0.5, 1.8))
     return out
 
-def apply_feature_multipliers(Xrow: pd.DataFrame, fmap: dict) -> pd.DataFrame:
+def _apply_feature_multipliers(Xrow: pd.DataFrame, fmap: dict) -> pd.DataFrame:
     X = Xrow.copy()
     for f, mult in fmap.items():
-        if f in X.columns and pd.notna(X.iat[0, X.columns.get_loc(f)]):
-            try: X.iat[0, X.columns.get_loc(f)] = float(X.iat[0, X.columns.get_loc(f)]) * float(mult)
+        if f in X.columns and pd.notna(X.at[X.index[0], f]):
+            try: X.at[X.index[0], f] = float(X.at[X.index[0], f]) * float(mult)
             except Exception: pass
     return X
 
-def run_crisis_pd(model, Xrow: pd.DataFrame, crisis_name: str, sector_bucket: str) -> float:
-    c = CRISIS_CATALOG[crisis_name]
-    sens = c["sector_sensitivity"].get(sector_bucket, c["sector_sensitivity"].get("__default__", 1.0))
-    fmap = combine_impacts(c["base_impacts"], sens, 1.0)  # fixed severity = 1.0 (no controls)
-    Xs = align_features_to_model(apply_feature_multipliers(Xrow, fmap), model)
-    if hasattr(model, "predict_proba"): return float(model.predict_proba(Xs)[:,1][0])
-    return float(model.predict(Xs)[0])
+def _pd_from_row(model, Xrow: pd.DataFrame) -> float:
+    Xr = align_features_to_model(Xrow, model)
+    if hasattr(model, "predict_proba"): return float(model.predict_proba(Xr)[:,1][0])
+    return float(model.predict(Xr)[0])
 
-# --- Baseline PD ---
-if hasattr(model, "predict_proba"):
-    pd_base = float(model.predict_proba(X_base)[:,1][0])
-else:
-    pd_base = float(model.predict(X_base)[0])
+# --------- Baseline PD ----------
+pd_base = _pd_from_row(model, X_base)
 
-# --- Tính PD cho tất cả crisis (không cần UI chọn) ---
+# --------- Compute Sector Impacts ----------
 X_base_comm = X_base.copy()
-rows = []
-for nm in CRISIS_CATALOG.keys():
-    pd_c = run_crisis_pd(model, X_base_comm, nm, sector_bucket)
-    impact_pct = (pd_c - pd_base) / pd_base * 100.0 if pd_base > 0 else np.nan
-    rows.append({"Crisis": nm, "PD": pd_c, "Impact_%": impact_pct})
-df_crises = pd.DataFrame(rows).sort_values("Impact_%", ascending=True)
+sector_rows = []
+for nm, cfg in SECTOR_CRISIS_CATALOG.items():
+    sens = cfg["sector_sensitivity"].get(sector_bucket, cfg["sector_sensitivity"].get("__default__", 1.0))
+    fmap = _combine_impacts(cfg["base_impacts"], sens, 1.0)  # fixed 1x (no UI controls)
+    pd_c = _pd_from_row(model, _apply_feature_multipliers(X_base_comm, fmap))
+    sector_rows.append({"Scenario": nm, "PD": pd_c, "Impact_%": (pd_c - pd_base)/pd_base*100.0 if pd_base>0 else np.nan})
+df_sector = pd.DataFrame(sector_rows).sort_values("Impact_%", ascending=True)
 
-# --- Monte Carlo tail risk (fallback feats_df nếu thiếu train_reference) ---
+# --------- Compute Systemic Impacts ----------
+sys_rows = []
+for nm, cfg in SYSTEMIC_SHOCKS.items():
+    fmap = _combine_impacts(cfg["impacts"], 1.0, 1.0)
+    pd_c = _pd_from_row(model, _apply_feature_multipliers(X_base_comm, fmap))
+    sys_rows.append({"Scenario": nm, "PD": pd_c, "Impact_%": (pd_c - pd_base)/pd_base*100.0 if pd_base>0 else np.nan})
+df_sys = pd.DataFrame(sys_rows).sort_values("Impact_%", ascending=True)
+
+# --------- Monte Carlo tail risk (fallback feats_df) ----------
 ref_df = load_train_reference()
 try:
     ref_df = ref_df if isinstance(ref_df, pd.DataFrame) else feats_df
@@ -506,65 +509,76 @@ try:
 except Exception:
     mc = {"PD_sims": np.array([])}; pd_var = np.nan; pd_cvar = np.nan
 
-# --- SHAP top features (để làm panel "Feature Sensitivity") ---
+# --------- SHAP top features for sensitivity ----------
 try:
-    shap_df = explain_shap(model, X_base, top_n=6)  # columns: Feature, SHAP, Direction/Value tùy utils
-    # Chuẩn hoá tên cột phổ biến
-    if "Feature" in shap_df.columns and ("SHAP" in shap_df.columns or "Impact" in shap_df.columns):
-        shap_df = shap_df.rename(columns={"Impact":"SHAP"})
-    else:
-        shap_df = pd.DataFrame()
+    shap_df = explain_shap(model, X_base, top_n=6).rename(columns={"Impact":"SHAP"})
+    if not {"Feature","SHAP"}.issubset(set(shap_df.columns)): shap_df = pd.DataFrame()
 except Exception:
     shap_df = pd.DataFrame()
 
-# --- Plotly dark style ---
-dark_layout = dict(template="plotly_dark",
-                   paper_bgcolor="#111111", plot_bgcolor="#111111",
-                   margin=dict(l=10,r=10,t=40,b=40))
+# --------- Render 4 charts (2x2 grid) ----------
+# Row 1: Sector Impact | Systemic Impact
+c1, c2 = st.columns(2)
+with c1:
+    if not df_sector.empty:
+        fig_sector = go.Figure()
+        fig_sector.add_trace(go.Bar(
+            x=df_sector["Scenario"], y=df_sector["Impact_%"],
+            text=[f"{v:.1f}%" if np.isfinite(v) else "-" for v in df_sector["Impact_%"]],
+            textposition="outside"
+        ))
+        fig_sector.update_layout(title=f"Sector Impact — ΔPD vs Baseline (%)  ·  Bucket: {sector_bucket}",
+                                 yaxis=dict(title="Impact (%)"),
+                                 height=360, margin=dict(l=10,r=10,t=40,b=80))
+        st.plotly_chart(fig_sector, use_container_width=True)
+    else:
+        st.info("No sector crisis impact computed.")
 
-# Panel 1: Scenario Impact (% change vs baseline)
-fig_imp = go.Figure()
-fig_imp.add_trace(go.Bar(
-    x=df_crises["Crisis"], y=df_crises["Impact_%"],
-    text=[f"{v:.1f}%" if np.isfinite(v) else "-" for v in df_crises["Impact_%"]],
-    textposition="outside"
-))
-fig_imp.update_layout(title="Scenario Impact — ΔPD vs Baseline (%)",
-                      yaxis=dict(title="Impact (%)"), **dark_layout, height=360)
-st.plotly_chart(fig_imp, use_container_width=True)
+with c2:
+    if not df_sys.empty:
+        fig_sys = go.Figure()
+        fig_sys.add_trace(go.Bar(
+            x=df_sys["Scenario"], y=df_sys["Impact_%"],
+            text=[f"{v:.1f}%" if np.isfinite(v) else "-" for v in df_sys["Impact_%"]],
+            textposition="outside"
+        ))
+        fig_sys.update_layout(title="Systemic Impact — ΔPD vs Baseline (%)",
+                              yaxis=dict(title="Impact (%)"),
+                              height=360, margin=dict(l=10,r=10,t=40,b=80))
+        st.plotly_chart(fig_sys, use_container_width=True)
+    else:
+        st.info("No systemic impact computed.")
 
-# Panel 2: Feature Sensitivity (SHAP of top features)
-colA, colB = st.columns([1,1])
-with colA:
+# Row 2: Feature Sensitivity | Monte Carlo
+c3, c4 = st.columns(2)
+with c3:
     if not shap_df.empty:
         fig_feat = go.Figure()
         fig_feat.add_trace(go.Bar(x=shap_df["Feature"], y=shap_df["SHAP"]))
         fig_feat.update_layout(title="Feature Sensitivity (SHAP — top 6)",
-                               yaxis=dict(title="SHAP contribution to PD"), **dark_layout, height=360)
+                               yaxis=dict(title="SHAP contribution to PD"),
+                               height=360, margin=dict(l=10,r=10,t=40,b=40))
         st.plotly_chart(fig_feat, use_container_width=True)
     else:
-        st.info("SHAP not available for this model/input.")
+        st.info("SHAP is not available for this model/input.")
 
-# Panel 3: Monte Carlo PD distribution with VaR/CVaR
-with colB:
-    st.markdown("Monte Carlo tail risk (95%)")
+with c4:
     if isinstance(mc.get("PD_sims"), np.ndarray) and mc["PD_sims"].size:
-        hist = np.histogram(mc["PD_sims"], bins=40)
-        centers = (hist[1][1:] + hist[1][:-1]) / 2
         fig_mc = go.Figure()
         fig_mc.add_trace(go.Histogram(x=mc["PD_sims"], nbinsx=40))
         fig_mc.add_vline(x=pd_var, line_width=2, line_dash="dash", line_color="orange")
         fig_mc.add_vline(x=pd_cvar, line_width=2, line_dash="dot", line_color="red")
-        fig_mc.update_layout(title="PD sims — VaR 95% (orange), CVaR 95% (red)",
-                             xaxis_title="PD", yaxis_title="count", **dark_layout, height=360)
+        fig_mc.update_layout(title="Monte Carlo — PD sims (VaR 95% orange, CVaR 95% red)",
+                             xaxis_title="PD", yaxis_title="Count",
+                             height=360, margin=dict(l=10,r=10,t=40,b=40))
         st.plotly_chart(fig_mc, use_container_width=True)
     else:
         st.info("Monte Carlo distribution unavailable.")
 
-# KPI strip
+# KPIs
 k1, k2, k3 = st.columns(3)
 with k1: st.metric("Baseline PD", f"{pd_base:.2%}")
-with k2: st.metric("Max crisis PD", f"{df_crises['PD'].max():.2%}" if not df_crises.empty else "-")
+with k2: st.metric("Max PD (Sector/Systemic)", f"{max(df_sector['PD'].max() if not df_sector.empty else 0.0, df_sys['PD'].max() if not df_sys.empty else 0.0):.2%}")
 with k3: st.metric("CVaR 95% (PD)", f"{pd_cvar:.2%}" if np.isfinite(pd_cvar) else "-")
 
 st.caption(f"Sector bucket: {sector_bucket} • No user controls. Crisis impacts are calibrated, "
