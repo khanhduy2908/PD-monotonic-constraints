@@ -1,5 +1,3 @@
-# app.py — Corporate Default Risk Scoring (Single-page, Bank-grade)
-# ----------------------------------------------------------------
 import os
 import json
 import numpy as np
@@ -517,53 +515,92 @@ fig_g = go.Figure(go.Indicator(
 fig_g.update_layout(height=240, margin=dict(l=10,r=10,t=10,b=10))
 st.plotly_chart(fig_g, width='stretch')
 
-# ===================== C) Model Explainability (SHAP) — nice chart =====================
+# ===================== C) Model Explainability (SHAP) — robust & pretty =====================
 st.subheader("C. Model Explainability (SHAP)")
 
+def _pick_col(df: pd.DataFrame, candidates) -> str | None:
+    cols = list(df.columns)
+    lower_map = {c.lower(): c for c in cols}
+    for cand in candidates:
+        if cand in df.columns:
+            return cand
+        if cand.lower() in lower_map:
+            return lower_map[cand.lower()]
+    return None
+
+fig_sh = None  # luôn khởi tạo để phần D dùng lại không lỗi
 try:
-    shap_df = explain_shap(model, X_base, top_n=10)
-    if "Impact" in shap_df.columns and "SHAP" not in shap_df.columns:
-        shap_df = shap_df.rename(columns={"Impact":"SHAP"})
+    shap_raw = explain_shap(model, X_base, top_n=10)
+    # Chuẩn hoá về DataFrame
+    if shap_raw is None:
+        shap_df = pd.DataFrame()
+    elif isinstance(shap_raw, pd.Series):
+        shap_df = shap_raw.reset_index()
+        shap_df.columns = ["Feature", "SHAP"]
+    elif isinstance(shap_raw, (list, tuple, np.ndarray)):
+        # cố gắng diễn giải list/ndarray (giả định: list of (feature, shap))
+        try:
+            shap_df = pd.DataFrame(shap_raw, columns=["Feature","SHAP"])
+        except Exception:
+            shap_df = pd.DataFrame()
+    elif isinstance(shap_raw, pd.DataFrame):
+        shap_df = shap_raw.copy()
+    else:
+        shap_df = pd.DataFrame()
 except Exception:
     shap_df = pd.DataFrame()
-
-DISPLAY_LABEL = {
-    "roa": "ROA (Return on Assets)", "roa_ratio": "ROA (Return on Assets)",
-    "roe": "ROE (Return on Equity)", "roe_ratio": "ROE (Return on Equity)",
-    "debt_to_assets": "Debt / Assets", "debt_assets_ratio": "Debt / Assets",
-    "debt_to_equity": "Debt / Equity", "de_ratio": "Debt / Equity",
-    "gross_margin": "Gross Margin", "net_profit_margin": "Net Profit Margin",
-    "current_ratio": "Current Ratio", "quick_ratio": "Quick Ratio",
-    "asset_turnover": "Asset Turnover", "inventory_turnover": "Inventory Turnover",
-    "receivables_turnover": "Receivables Turnover",
-    "revenue_cagr_3y": "Revenue CAGR (3Y)",
-}
-def beautify_label(x: str) -> str:
-    key = (x or "").strip()
-    low = key.lower()
-    return DISPLAY_LABEL.get(low, key)
 
 if shap_df.empty:
     st.info("SHAP is not available for this model/input.")
 else:
-    shap_df["absSHAP"] = shap_df["SHAP"].abs()
-    shap_df = shap_df.sort_values("absSHAP", ascending=True).tail(10)
-    shap_df["Label"] = shap_df["Feature"].apply(beautify_label)
+    # Tìm cột Feature & SHAP một cách linh hoạt
+    feat_col = _pick_col(shap_df, ["Feature","feature","name","variable","Feature Name"])
+    shap_col = _pick_col(shap_df, ["SHAP","shap","shap_value","Shap value","Impact","impact","contribution","value"])
+    if (feat_col is None) or (shap_col is None):
+        st.info("SHAP output detected but columns are not recognizable. Skipping SHAP chart.")
+    else:
+        # Làm sạch & vẽ
+        def _beautify_label(x: str) -> str:
+            DISPLAY_LABEL = {
+                "roa": "ROA (Return on Assets)", "roa_ratio": "ROA (Return on Assets)",
+                "roe": "ROE (Return on Equity)", "roe_ratio": "ROE (Return on Equity)",
+                "debt_to_assets": "Debt / Assets", "debt_assets_ratio": "Debt / Assets",
+                "debt_to_equity": "Debt / Equity", "de_ratio": "Debt / Equity",
+                "gross_margin": "Gross Margin", "net_profit_margin": "Net Profit Margin",
+                "current_ratio": "Current Ratio", "quick_ratio": "Quick Ratio",
+                "asset_turnover": "Asset Turnover", "inventory_turnover": "Inventory Turnover",
+                "receivables_turnover": "Receivables Turnover", "revenue_cagr_3y": "Revenue CAGR (3Y)",
+            }
+            key = (str(x) or "").strip()
+            return DISPLAY_LABEL.get(key.lower(), key)
 
-    fig_sh = go.Figure()
-    colors = ["#E24A33" if v < 0 else "#1F77B4" for v in shap_df["SHAP"]]
-    fig_sh.add_trace(go.Bar(
-        x=shap_df["SHAP"], y=shap_df["Label"],
-        orientation="h", marker_color=colors,
-        text=[f"{v:+.3f}" for v in shap_df["SHAP"]],
-        textposition="outside"
-    ))
-    fig_sh.update_layout(
-        title="Top Feature Contributions (SHAP)",
-        xaxis=dict(title="SHAP value → PD"),
-        height=420, margin=dict(l=10, r=20, t=40, b=10)
-    )
-    st.plotly_chart(fig_sh, width='stretch')
+        # Ép numeric an toàn
+        shap_df = shap_df[[feat_col, shap_col]].dropna()
+        shap_df[shap_col] = pd.to_numeric(shap_df[shap_col], errors="coerce")
+        shap_df = shap_df.dropna()
+        if shap_df.empty:
+            st.info("SHAP values are empty after cleaning.")
+        else:
+            shap_df["absSHAP"] = shap_df[shap_col].abs()
+            shap_df = shap_df.sort_values("absSHAP", ascending=True).tail(10)
+            shap_df["Label"] = shap_df[feat_col].astype(str).apply(_beautify_label)
+
+            fig_sh = go.Figure()
+            colors = ["#E24A33" if v < 0 else "#1F77B4" for v in shap_df[shap_col]]
+            fig_sh.add_trace(go.Bar(
+                x=shap_df[shap_col],
+                y=shap_df["Label"],
+                orientation="h",
+                marker_color=colors,
+                text=[f"{v:+.3f}" for v in shap_df[shap_col]],
+                textposition="outside"
+            ))
+            fig_sh.update_layout(
+                title="Top Feature Contributions (SHAP)",
+                xaxis=dict(title="SHAP value → PD"),
+                height=420, margin=dict(l=10, r=20, t=40, b=10)
+            )
+            st.plotly_chart(fig_sh, width='stretch')
 
 # ===================== D) Stress Testing — 4 panels (Sector vs Systemic) =====================
 st.subheader("D. Stress Testing — Sector & Systemic Impacts")
@@ -742,12 +779,9 @@ with c2:
 
 c3, c4 = st.columns(2)
 with c3:
-    try:
-        if not shap_df.empty:
-            st.plotly_chart(fig_sh, width='stretch')
-        else:
-            st.info("SHAP is not available for this model/input.")
-    except Exception:
+    if (fig_sh is not None):
+        st.plotly_chart(fig_sh, width='stretch')
+    else:
         st.info("SHAP is not available for this model/input.")
 
 with c4:
