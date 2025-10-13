@@ -12,6 +12,9 @@ from utils.feature_selection import select_features_for_model
 from utils.model_scoring import load_lgbm_model, model_feature_names, explain_shap
 from utils.policy import load_thresholds, thresholds_for_sector, classify_pd
 
+def show_plotly(fig, key):
+    st.plotly_chart(fig, width='stretch', key=key, config={"displayModeBar": False})
+
 # ===================== Page config & styles =====================
 st.set_page_config(page_title="Corporate Default Risk Scoring", layout="wide")
 st.markdown("""
@@ -806,3 +809,11 @@ with k3: st.metric("CVaR 95% (PD)", f"{pd_cvar:.2%}" if np.isfinite(pd_cvar) els
 st.caption("Notes: PD is model-based with multi-factor log-odds adjustments (exchange, size, leverage, profitability, liquidity, governance, sector tilt). "
            "Stress impacts use alias-mapped feature multipliers; unknown columns are skipped safely. "
            "Coverage ratios (Interest_Coverage, EBITDA_to_Interest) have been removed from scenarios as requested.")
+
+show_plotly(fig_rev, "rev_profit")
+show_plotly(fig_cap, "cap_structure")
+show_plotly(fig_g, "pd_gauge")
+show_plotly(fig_sh, "shap_chart")
+show_plotly(fig_sector, "sector_chart")
+show_plotly(fig_sys, "sys_chart")
+show_plotly(fig_mc, "mc_chart")
