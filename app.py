@@ -12,9 +12,6 @@ from utils.feature_selection import select_features_for_model
 from utils.model_scoring import load_lgbm_model, model_feature_names, explain_shap
 from utils.policy import load_thresholds, thresholds_for_sector, classify_pd
 
-def show_plotly(fig, key):
-    st.plotly_chart(fig, width='stretch', key=key, config={"displayModeBar": False})
-
 # ===================== Page config & styles =====================
 st.set_page_config(page_title="Corporate Default Risk Scoring", layout="wide")
 st.markdown("""
@@ -328,6 +325,301 @@ X_base = model_align_row(row_model, model, fallbacks=final_features)
 X_base = align_features_to_model(X_base, model)   # ensure exact shape as training
 features_order = list(X_base.columns)
 
+# app.py — Corporate Default Risk Scoring (Single-page, Bank-grade)
+# ----------------------------------------------------------------
+import os
+import json
+import numpy as np
+import pandas as pd
+import streamlit as st
+import plotly.graph_objects as go
+
+# ==== Your utils (must exist in repo) ====
+from utils.data_cleaning import clean_and_log_transform
+from utils.feature_engineering import preprocess_and_create_features
+from utils.feature_selection import select_features_for_model
+from utils.model_scoring import load_lgbm_model, model_feature_names, explain_shap
+from utils.policy import load_thresholds, thresholds_for_sector, classify_pd
+
+# ===================== Page config & styles =====================
+st.set_page_config(page_title="Corporate Default Risk Scoring", layout="wide")
+st.markdown("""
+<style>
+.block-container {padding-top: 0.8rem; padding-bottom: 1.2rem;}
+h1,h2,h3 {font-weight: 650;}
+.small {font-size:12px; color:#6b7280;}
+.metric-card {background:#F8FAFC;border:1px solid #E5E7EB;border-radius:10px;padding:10px 12px;margin-bottom:8px;}
+hr {margin: 0.6rem 0;}
+</style>
+""", unsafe_allow_html=True)
+
+# ===================== Helpers =====================
+ID_LABEL_COLS = {"Year","Ticker","Sector","Exchange","Default"}
+
+def read_csv_smart(path: str) -> pd.DataFrame:
+    """Read CSV with robust encoding fallbacks."""
+    for enc in ("utf-8-sig", "utf-8", "latin1"):
+        try:
+            df = pd.read_csv(path, encoding=enc)
+            if df.shape[1] == 0:
+                raise ValueError("CSV has no columns (empty or bad delimiter).")
+            return df
+        except Exception:
+            continue
+    raise RuntimeError(f"Unable to read {path} with common encodings.")
+
+def to_float(x):
+    try:
+        if pd.isna(x): return np.nan
+        if isinstance(x, str): x = x.replace(",", "")
+        return float(x)
+    except Exception:
+        return np.nan
+
+def fmt_money(x):
+    return "-" if (x is None or not np.isfinite(x)) else f"{x:,.2f}"
+
+def fmt_ratio(x):
+    if (x is None) or (not np.isfinite(x)): return "-"
+    return f"{x:.2%}" if -1.5 <= float(x) <= 1.5 else f"{x:,.4f}"
+
+def safe_df(X: pd.DataFrame) -> pd.DataFrame:
+    return X.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+
+def force_numeric(X: pd.DataFrame) -> pd.DataFrame:
+    for c in X.columns:
+        X[c] = pd.to_numeric(X[c], errors="coerce")
+    return safe_df(X)
+
+def model_align_row(row: pd.Series, model, fallbacks: list) -> pd.DataFrame:
+    """Map row -> 1xN as expected by model (add missing=0, drop extras, order correct)."""
+    m_feats = model_feature_names(model)
+    feats = list(m_feats) if m_feats else list(fallbacks)
+    data = {f: float(row.get(f, 0.0)) for f in feats}
+    X = pd.DataFrame([data], columns=feats)
+    return force_numeric(X)
+
+def align_features_to_model(X_df: pd.DataFrame, model):
+    """Ensure X_df columns exactly match model.feature_name_ (order & count)."""
+    model_feats = list(getattr(model, "feature_name_", []) or [])
+    if not model_feats:
+        return force_numeric(X_df.copy())
+    X = X_df.copy()
+    for col in model_feats:
+        if col not in X.columns:
+            X[col] = 0.0
+    X = X[model_feats]
+    return force_numeric(X)
+
+def load_train_reference():
+    for p in ("models/train_reference.parquet", "models/train_reference.csv"):
+        if os.path.exists(p):
+            try:
+                return pd.read_parquet(p) if p.endswith(".parquet") else pd.read_csv(p)
+            except Exception:
+                pass
+    return None
+
+# ===================== Stress & MC math =====================
+def shrink_cov(cov: np.ndarray, alpha: float = 0.15) -> np.ndarray:
+    d = np.diag(np.diag(cov))
+    shrunk = (1 - alpha) * cov + alpha * d
+    w, V = np.linalg.eigh(shrunk)
+    w = np.clip(w, 1e-8, None)
+    return (V * w) @ V.T
+
+def mc_cvar_pd(model, Xrow: pd.DataFrame, reference_df: pd.DataFrame,
+               sims: int = 5000, alpha: float = 0.95, clip_q=(0.01,0.99)) -> dict:
+    assert Xrow.shape[0] == 1
+    cols = list(Xrow.columns)
+    ref = reference_df[cols].replace([np.inf,-np.inf], np.nan).fillna(0.0)
+    base = Xrow[cols].values.reshape(1,-1).astype(float)[0]
+    cov = np.cov(ref.values.T)
+    if not np.all(np.isfinite(cov)): cov = np.nan_to_num(cov, nan=0.0)
+    cov = shrink_cov(cov, alpha=0.15)
+    sims_mat = np.random.multivariate_normal(mean=base, cov=cov, size=sims)
+    ql = ref.quantile(clip_q[0], numeric_only=True).values
+    qh = ref.quantile(clip_q[1], numeric_only=True).values
+    sims_mat = np.minimum(np.maximum(sims_mat, ql), qh)
+    X = pd.DataFrame(sims_mat, columns=cols)
+    X = align_features_to_model(force_numeric(X), model)
+    if hasattr(model, "predict_proba"):
+        pd_sims = model.predict_proba(X)[:,1]
+    else:
+        pd_sims = model.predict(X).astype(float)
+    var = float(np.quantile(pd_sims, alpha))
+    cvar = float(pd_sims[pd_sims >= var].mean()) if (pd_sims >= var).any() else var
+    return {"PD_sims": pd_sims, "VaR": var, "CVaR": cvar}
+
+# ===================== Load data & artifacts =====================
+@st.cache_data(show_spinner=False)
+def load_raw_and_features():
+    if not os.path.exists("bctc_final.csv"):
+        raise FileNotFoundError("bctc_final.csv not found in repository root.")
+    raw = read_csv_smart("bctc_final.csv")            # raw for overview
+    cleaned = clean_and_log_transform(raw.copy())     # pipeline input
+    feats = preprocess_and_create_features(cleaned)   # engineered features for model
+    return raw, feats
+
+@st.cache_resource(show_spinner=False)
+def load_artifacts():
+    model = load_lgbm_model("models/lgbm_model.pkl")
+    thresholds = load_thresholds("models/threshold.json")
+    return model, thresholds
+
+# ===================== Header =====================
+st.title("Corporate Default Risk Scoring")
+st.caption("Single page • LightGBM • SHAP • Sector & Systemic stress • Monte Carlo CVaR • Bank-grade UI")
+
+# ===================== Data init =====================
+try:
+    raw_df, feats_df = load_raw_and_features()
+except Exception as e:
+    st.error(f"Dataset error: {e}")
+    st.stop()
+
+try:
+    model, thresholds = load_artifacts()
+except Exception as e:
+    st.error(f"Artifacts error: {e}")
+    st.stop()
+
+numeric_cols = [c for c in feats_df.columns if pd.api.types.is_numeric_dtype(feats_df[c])]
+candidate_features = [c for c in numeric_cols if c not in ID_LABEL_COLS]
+model_feats = model_feature_names(model)
+final_features = select_features_for_model(feats_df, candidate_features, model_feats)
+
+# ===================== Sidebar Inputs & Profile =====================
+all_tickers = sorted(feats_df["Ticker"].astype(str).unique().tolist())
+ticker = st.sidebar.selectbox("Ticker", all_tickers, index=0 if all_tickers else None)
+
+years_avail = sorted(feats_df.loc[feats_df["Ticker"].astype(str)==ticker, "Year"].dropna().astype(int).unique().tolist())
+year_idx = len(years_avail)-1 if years_avail else 0
+year = st.sidebar.selectbox("Year", years_avail, index=year_idx)
+
+row_model = feats_df[(feats_df["Ticker"].astype(str)==ticker) & (feats_df["Year"]==year)]
+if row_model.empty:
+    st.warning("No record for selected Ticker & Year.")
+    st.stop()
+row_model = row_model.iloc[0]
+
+row_raw = raw_df[(raw_df["Ticker"].astype(str)==ticker) & (raw_df["Year"]==year)]
+row_raw = row_raw.iloc[0] if not row_raw.empty else pd.Series(dtype="object")
+
+sector_raw = str(row_model.get("Sector","")) if pd.notna(row_model.get("Sector","")) else ""
+exchange = (str(row_model.get("Exchange","")) or "").upper()
+
+# --- Sector alias & bucket (dùng cho PD và Stress) ---
+def sector_alias_map(sector_raw: str) -> str:
+    s = (sector_raw or "").lower()
+    if any(k in s for k in ["tech","information","software","it"]): return "Technology"
+    if "tele" in s: return "Telecom"
+    if any(k in s for k in ["material","metal","mining","cement","basic res"]): return "Materials"
+    if any(k in s for k in ["energy","oil","gas","coal"]): return "Energy"
+    if any(k in s for k in ["bank","finance","insurance","securities"]): return "Financials"
+    if any(k in s for k in ["real estate","property","construction"]): return "Real Estate"
+    if any(k in s for k in ["industrial","manufacturing","machinery"]): return "Industrials"
+    if any(k in s for k in ["consumer discretionary","retail","auto","apparel"]): return "Consumer Discretionary"
+    if any(k in s for k in ["consumer staples","food","beverage","household","staple"]): return "Consumer Staples"
+    if any(k in s for k in ["utilit"]): return "Utilities"
+    return "__default__"
+
+def _normalize_sector_bucket(s: str) -> str:
+    x = (s or "").lower()
+    if any(k in x for k in ["tech","software","it","semiconductor","internet"]): return "Technology"
+    if any(k in x for k in ["telecom","communication services","telco"]): return "Telecom"
+    if any(k in x for k in ["bank","insur","securit","financial"]): return "Financials"
+    if any(k in x for k in ["real estate","property","construction","developer"]): return "Real Estate"
+    if any(k in x for k in ["steel","material","cement","mining","basic res","chem"]): return "Materials"
+    if any(k in x for k in ["energy","oil","gas","coal","refining","petro","power gen"]): return "Energy"
+    if any(k in x for k in ["industrial","manufacturing","machinery","aviation","aerospace"]): return "Industrials"
+    if any(k in x for k in ["consumer discretionary","retail","auto","apparel","electronics retail"]): return "Consumer Discretionary"
+    if any(k in x for k in ["consumer staples","food","beverage","household","staple"]): return "Consumer Staples"
+    if any(k in x for k in ["health","pharma","biotech","medical"]): return "Healthcare"
+    if any(k in x for k in ["utility","water","electric","gas util"]): return "Utilities"
+    if any(k in x for k in ["transport","airline","airport","shipping","logistics"]): return "Transportation"
+    if any(k in x for k in ["hotel","travel","tourism","hospitality","leisure"]): return "Hospitality & Travel"
+    if any(k in x for k in ["agri","fisher","aquaculture","seafood","fishery"]): return "Agriculture & Fisheries"
+    if any(k in x for k in ["auto","oem","components"]): return "Automotive"
+    return "__default__"
+
+sector_alias = sector_alias_map(sector_raw)
+sector_bucket = _normalize_sector_bucket(sector_raw)
+
+# ---- Extract raw values (robust) ----
+def get_raw(col_names, default=np.nan):
+    for c in col_names:
+        if c in row_raw.index:
+            return to_float(row_raw[c])
+    return default
+
+assets_raw = get_raw(["TOTAL ASSETS (Bn. VND)","Total_Assets"])
+equity_raw = get_raw(["OWNER'S EQUITY(Bn.VND)","Equity"])
+curr_liab = get_raw(["Current liabilities (Bn. VND)","Current_Liabilities"], 0.0)
+long_liab = get_raw(["Long-term liabilities (Bn. VND)","Long_Term_Liabilities"], 0.0)
+short_bor = get_raw(["Short-term borrowings (Bn. VND)","Short_Term_Borrowings"], 0.0)
+
+revenue_raw = get_raw(["Net Sales","Revenue"])
+net_profit_raw = get_raw(["Net Profit For the Year","Net_Profit"])
+oper_profit_raw = get_raw(["Operating Profit/Loss","Operating_Profit"])
+cash_raw = get_raw(["Cash and cash equivalents (Bn. VND)","Cash"], 0.0)
+receivables_raw = get_raw(["Accounts receivable (Bn. VND)","Receivables"], 0.0)
+inventories_raw = get_raw(["Net Inventories","Inventories"], 0.0)
+current_assets_raw = get_raw(["CURRENT ASSETS (Bn. VND)","Current_Assets"], 0.0)
+
+def safe_div(a, b):
+    try:
+        return (float(a) / float(b)) if (b not in [0, None, np.nan]) else np.nan
+    except Exception:
+        return np.nan
+
+total_liab_raw = (curr_liab or 0.0) + (long_liab or 0.0)
+interest_bearing_debt = (short_bor or 0.0) + (long_liab or 0.0)
+if "Total_Debt" in row_raw.index and pd.notna(row_raw.get("Total_Debt")):
+    debt_raw = to_float(row_raw.get("Total_Debt"))
+else:
+    debt_raw = interest_bearing_debt
+
+roa = safe_div(net_profit_raw, assets_raw)
+roe = safe_div(net_profit_raw, equity_raw)
+
+dta = safe_div(total_liab_raw, assets_raw)
+if pd.notna(dta): dta = min(max(dta, 0.0), 0.999)
+
+dte = safe_div(debt_raw, equity_raw)
+if pd.notna(dte): dte = min(max(dte, 0.0), 0.999)
+
+current_ratio = safe_div(current_assets_raw, curr_liab)
+quick_ratio   = safe_div((cash_raw or 0.0) + (receivables_raw or 0.0), curr_liab)
+
+# ---- Sidebar profile ----
+with st.sidebar:
+    st.header("Company Profile")
+    st.subheader(f"{ticker} — {int(year)}")
+    st.markdown(f"**Sector:** {sector_raw or '-'}  \n**Exchange:** {exchange or '-'}")
+    st.markdown("<div class='metric-card'>"
+                f"Total Assets: <b>{fmt_money(assets_raw)}</b><br>"
+                f"Equity: <b>{fmt_money(equity_raw)}</b><br>"
+                f"Debt: <b>{fmt_money(debt_raw)}</b><br>"
+                f"Revenue: <b>{fmt_money(revenue_raw)}</b><br>"
+                f"Net Profit: <b>{fmt_money(net_profit_raw)}</b>"
+                "</div>", unsafe_allow_html=True)
+    st.markdown("<div class='metric-card'>"
+                f"ROA: <b>{fmt_ratio(roa)}</b><br>"
+                f"ROE: <b>{fmt_ratio(roe)}</b><br>"
+                f"Debt/Equity: <b>{fmt_ratio(dte)}</b><br>"
+                f"Debt/Assets: <b>{fmt_ratio(dta)}</b>"
+                "</div>", unsafe_allow_html=True)
+
+# ===================== Build model input =====================
+X_base = model_align_row(row_model, model, fallbacks=final_features)
+X_base = align_features_to_model(X_base, model)
+
+# ===================== Helper: Plotly unified display =====================
+def show_plotly(fig, key: str):
+    """Render Plotly chart with unified style & avoid duplicate element IDs."""
+    st.plotly_chart(fig, width='stretch', key=key, config={"displayModeBar": False})
+
 # ===================== A) Company Overview =====================
 st.subheader("A. Company Financial Overview")
 hist = raw_df[raw_df["Ticker"].astype(str)==ticker].sort_values("Year")
@@ -349,14 +641,14 @@ with col1:
             legend=dict(orientation="h", yanchor="bottom", y=-0.25, xanchor="center", x=0.5),
             height=380
         )
-        st.plotly_chart(fig_rev, width='stretch')
+        show_plotly(fig_rev, "rev_profit")
     else:
         st.info("No historical series for this company.")
 
 with col2:
     fig_cap = go.Figure(data=[go.Pie(labels=["Total Debt","Equity"], values=[debt_raw, equity_raw], hole=0.5)])
     fig_cap.update_layout(title="Capital Structure", height=380)
-    st.plotly_chart(fig_cap, width='stretch')
+    show_plotly(fig_cap, "cap_structure")
 
 st.markdown("### Key Financial Ratios")
 key_ratios = pd.DataFrame({
@@ -364,7 +656,7 @@ key_ratios = pd.DataFrame({
     "Value": [roa, roe, dta, dte, current_ratio, quick_ratio]
 })
 key_ratios["Value"] = key_ratios["Value"].apply(fmt_ratio)
-st.dataframe(key_ratios, use_container_width=True, hide_index=True)  # dataframe UI vẫn OK
+st.dataframe(key_ratios, use_container_width=True, hide_index=True)
 
 # ===================== B) Default Probability (PD) & Policy (Multi-factor) =====================
 st.subheader("B. Default Probability (PD) & Policy Band")
@@ -385,13 +677,13 @@ def _safe(v):
     except Exception:
         return np.nan
 
-# 1) PD gốc từ model
+# 1) PD gốc
 if hasattr(model, "predict_proba"):
     pd_base = float(model.predict_proba(X_base)[:, 1][0])
 else:
     pd_base = float(model.predict(X_base)[0])
 
-# 2) Cấu hình hậu-hiệu chỉnh PD (có thể đặt file models/pd_adjustments.json để override)
+# 2) Cấu hình hậu-hiệu chỉnh
 DEFAULT_PD_CFG = {
     "exchange_logit_mult": {"UPCOM": 0.40, "HNX": 0.18, "HOSE": 0.00, "HSX": 0.00, "__default__": 0.10},
     "size": {"assets_q40": 0.20, "revenue_q40": 0.10},
@@ -399,7 +691,7 @@ DEFAULT_PD_CFG = {
     "profitability": {"roa_neg": 0.25, "roe_neg": 0.20, "npm_neg": 0.15, "rev_cagr_neg": 0.10},
     "liquidity": {"cr_low": 0.12, "qr_low": 0.08},
     "governance": {"auditor_non_big4": 0.10, "opinion_qualified": 0.30, "filing_delay": 0.12},
-    # sector tilt (nâng cấp như bạn gợi ý)
+    # sector tilt (nâng cấp theo đề xuất)
     "sector_tilt": {
         "Real Estate": 0.20, "Materials": 0.10, "Consumer Discretionary": 0.05,
         "Financials": 0.00, "Utilities": -0.05, "Technology": -0.02, "__default__": 0.00
@@ -407,7 +699,6 @@ DEFAULT_PD_CFG = {
     "pd_floor": {"UPCOM": 0.06, "HNX": 0.04, "HOSE": 0.02, "HSX": 0.02, "__default__": 0.03},
     "pd_cap":   {"default": 0.60}
 }
-
 def load_pd_cfg(path="models/pd_adjustments.json"):
     try:
         if os.path.exists(path):
@@ -415,7 +706,6 @@ def load_pd_cfg(path="models/pd_adjustments.json"):
     except Exception:
         pass
     return DEFAULT_PD_CFG
-
 PD_CFG = load_pd_cfg()
 
 # 3) Tín hiệu rủi ro từ row (không dùng Interest_Coverage/EBITDA_to_Interest)
@@ -432,16 +722,14 @@ auditor = str(_from_row(row_raw, ["Auditor","Audit_Firm","Auditor_Name"], "") or
 opinion = str(_from_row(row_raw, ["Audit_Opinion","Opinion"], "") or "")
 filing_delay = _from_row(row_raw, ["Filing_Delay_Days","Filing_Delay"], np.nan)
 
-# 4) Phân vị làm mốc size từ tập train
+# 4) Phân vị size từ tập train
 ref = load_train_reference()
 ref_use = ref if isinstance(ref, pd.DataFrame) else feats_df
-
 def _q(col, q, fallback=np.nan):
     if (col in ref_use.columns) and ref_use[col].notna().any():
         try: return float(ref_use[col].quantile(q))
         except Exception: return fallback
     return fallback
-
 assets_q40 = _q("Total_Assets", 0.40, np.nan) if "Total_Assets" in ref_use.columns else np.nan
 revenue_q40 = _q("Revenue", 0.40, np.nan) if "Revenue" in ref_use.columns else np.nan
 
@@ -463,11 +751,11 @@ flags = {
     "filing_delay": (isinstance(filing_delay, float) and filing_delay >= 20),
 }
 
-logit0 = _logit(pd_base)
+logit0 = np.log(max(pd_base,1e-9)/max(1-pd_base,1e-9))
 adj = 0.0
 # Exchange premium
 adj += flags["exch_mult"]
-# Sector tilt — ưu tiên bucket (nếu không có thì dùng alias, rồi default)
+# Sector tilt
 adj += PD_CFG["sector_tilt"].get(sector_bucket, PD_CFG["sector_tilt"].get(sector_alias, PD_CFG["sector_tilt"]["__default__"]))
 # Size
 if flags["assets_q40"]:  adj += PD_CFG["size"]["assets_q40"]
@@ -489,7 +777,7 @@ if flags["auditor_non_big4"]:  adj += PD_CFG["governance"]["auditor_non_big4"]
 if flags["opinion_qualified"]: adj += PD_CFG["governance"]["opinion_qualified"]
 if flags["filing_delay"]:      adj += PD_CFG["governance"]["filing_delay"]
 
-pd_adj = _sigmoid(logit0 + adj)
+pd_adj = 1.0 / (1.0 + np.exp(-(logit0 + adj)))
 pd_floor = PD_CFG["pd_floor"].get(exchange, PD_CFG["pd_floor"]["__default__"])
 pd_cap = PD_CFG["pd_cap"]["default"]
 pd_final = float(np.clip(pd_adj, pd_floor, pd_cap))
@@ -516,7 +804,7 @@ fig_g = go.Figure(go.Indicator(
            'threshold': {'line': {'color':'red','width':3},'value':pd_final*100}}
 ))
 fig_g.update_layout(height=240, margin=dict(l=10,r=10,t=10,b=10))
-st.plotly_chart(fig_g, width='stretch')
+show_plotly(fig_g, "pd_gauge")
 
 # ===================== C) Model Explainability (SHAP) — robust & pretty =====================
 st.subheader("C. Model Explainability (SHAP)")
@@ -531,17 +819,15 @@ def _pick_col(df: pd.DataFrame, candidates) -> str | None:
             return lower_map[cand.lower()]
     return None
 
-fig_sh = None  # luôn khởi tạo để phần D dùng lại không lỗi
+fig_sh = None
 try:
     shap_raw = explain_shap(model, X_base, top_n=10)
-    # Chuẩn hoá về DataFrame
     if shap_raw is None:
         shap_df = pd.DataFrame()
     elif isinstance(shap_raw, pd.Series):
         shap_df = shap_raw.reset_index()
         shap_df.columns = ["Feature", "SHAP"]
     elif isinstance(shap_raw, (list, tuple, np.ndarray)):
-        # cố gắng diễn giải list/ndarray (giả định: list of (feature, shap))
         try:
             shap_df = pd.DataFrame(shap_raw, columns=["Feature","SHAP"])
         except Exception:
@@ -556,13 +842,11 @@ except Exception:
 if shap_df.empty:
     st.info("SHAP is not available for this model/input.")
 else:
-    # Tìm cột Feature & SHAP một cách linh hoạt
     feat_col = _pick_col(shap_df, ["Feature","feature","name","variable","Feature Name"])
     shap_col = _pick_col(shap_df, ["SHAP","shap","shap_value","Shap value","Impact","impact","contribution","value"])
     if (feat_col is None) or (shap_col is None):
         st.info("SHAP output detected but columns are not recognizable. Skipping SHAP chart.")
     else:
-        # Làm sạch & vẽ
         def _beautify_label(x: str) -> str:
             DISPLAY_LABEL = {
                 "roa": "ROA (Return on Assets)", "roa_ratio": "ROA (Return on Assets)",
@@ -577,7 +861,6 @@ else:
             key = (str(x) or "").strip()
             return DISPLAY_LABEL.get(key.lower(), key)
 
-        # Ép numeric an toàn
         shap_df = shap_df[[feat_col, shap_col]].dropna()
         shap_df[shap_col] = pd.to_numeric(shap_df[shap_col], errors="coerce")
         shap_df = shap_df.dropna()
@@ -603,7 +886,7 @@ else:
                 xaxis=dict(title="SHAP value → PD"),
                 height=420, margin=dict(l=10, r=20, t=40, b=10)
             )
-            st.plotly_chart(fig_sh, width='stretch')
+            show_plotly(fig_sh, "shap_chart")
 
 # ===================== D) Stress Testing — 4 panels (Sector vs Systemic) =====================
 st.subheader("D. Stress Testing — Sector & Systemic Impacts")
@@ -758,10 +1041,10 @@ with c1:
             text=[f"{v:.1f}%" if np.isfinite(v) else "-" for v in df_sector["Impact_%"]],
             textposition="outside"
         ))
-        fig_sector.update_layout(title=f"Sector Impact — ΔPD vs Baseline (%)  ·  Bucket: {sector_bucket}",
+        fig_sector.update_layout(title=f"Sector Impact — ΔPD vs Baseline (%)  ·  {sector_bucket}",
                                  yaxis=dict(title="Impact (%)"),
                                  height=360, margin=dict(l=10, r=10, t=40, b=80))
-        st.plotly_chart(fig_sector, width='stretch')
+        show_plotly(fig_sector, "sector_chart")
     else:
         st.info("No sector crisis impact computed.")
 
@@ -776,14 +1059,14 @@ with c2:
         fig_sys.update_layout(title="Systemic Impact — ΔPD vs Baseline (%)",
                               yaxis=dict(title="Impact (%)"),
                               height=360, margin=dict(l=10, r=10, t=40, b=80))
-        st.plotly_chart(fig_sys, width='stretch')
+        show_plotly(fig_sys, "sys_chart")
     else:
         st.info("No systemic impact computed.")
 
 c3, c4 = st.columns(2)
 with c3:
-    if (fig_sh is not None):
-        st.plotly_chart(fig_sh, width='stretch')
+    if fig_sh is not None:
+        show_plotly(fig_sh, "shap_chart_2")
     else:
         st.info("SHAP is not available for this model/input.")
 
@@ -796,7 +1079,7 @@ with c4:
         fig_mc.update_layout(title="Monte Carlo — PD sims (VaR 95% orange, CVaR 95% red)",
                              xaxis_title="PD", yaxis_title="Count",
                              height=360, margin=dict(l=10, r=10, t=40, b=40))
-        st.plotly_chart(fig_mc, width='stretch')
+        show_plotly(fig_mc, "mc_chart")
     else:
         st.info("Monte Carlo distribution unavailable.")
 
@@ -806,14 +1089,6 @@ with k1: st.metric("Baseline PD (post-adj in B)", f"{pd_final:.2%}")
 with k2: st.metric("Max PD (Sector/Systemic)", f"{max(df_sector['PD'].max() if not df_sector.empty else 0.0, df_sys['PD'].max() if not df_sys.empty else 0.0):.2%}")
 with k3: st.metric("CVaR 95% (PD)", f"{pd_cvar:.2%}" if np.isfinite(pd_cvar) else "-")
 
-st.caption("Notes: PD is model-based with multi-factor log-odds adjustments (exchange, size, leverage, profitability, liquidity, governance, sector tilt). "
-           "Stress impacts use alias-mapped feature multipliers; unknown columns are skipped safely. "
-           "Coverage ratios (Interest_Coverage, EBITDA_to_Interest) have been removed from scenarios as requested.")
-
-show_plotly(fig_rev, "rev_profit")
-show_plotly(fig_cap, "cap_structure")
-show_plotly(fig_g, "pd_gauge")
-show_plotly(fig_sh, "shap_chart")
-show_plotly(fig_sector, "sector_chart")
-show_plotly(fig_sys, "sys_chart")
-show_plotly(fig_mc, "mc_chart")
+st.caption("Notes: PD uses multi-factor log-odds adjustments (exchange, size, leverage, profitability, liquidity, governance, sector tilt). "
+           "Stress scenarios are sector-aware and alias-mapped to model features. "
+           "Interest_Coverage & EBITDA_to_Interest have been removed from scenarios as requested.")
