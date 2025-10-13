@@ -468,17 +468,18 @@ def build_sector_scenarios(sector_name: str) -> dict:
 
 # -------------------------------------------------------------
 # Define scale_multiplier function to adjust the crisis impact
-def scale_multiplier(factor: float, sev: float, exch_int: float) -> float:
+def scale_multiplier(factor_dict: dict, sev: float, exch_int: float) -> dict:
     """
-    Scales the crisis impact multiplier based on severity and exchange intensity.
+    Scales the crisis impact multipliers for each factor in the crisis dictionary
+    based on severity and exchange intensity.
 
-    :param factor: The original crisis factor multiplier (e.g., 0.70 for a 30% decrease).
+    :param factor_dict: Dictionary of crisis factors for each scenario (e.g., "Revenue_CAGR_3Y", "ROA").
     :param sev: The severity multiplier (e.g., 1.0 for moderate, 1.5 for severe).
     :param exch_int: The exchange intensity multiplier based on the selected exchange.
-    :return: Scaled multiplier.
+    :return: Scaled crisis factor dictionary.
     """
-    # Apply the severity and exchange intensity adjustments
-    return factor * sev * exch_int
+    # Scale each factor in the dictionary
+    return {key: value * sev * exch_int for key, value in factor_dict.items()}
 
 # -------------------------------------------------------------
 # Add a slider to select the severity of the crisis
@@ -513,6 +514,7 @@ if not df_sector.empty:
     st.plotly_chart(fig, width='stretch')  # Updated to match Streamlit's new API
 else:
     st.info("No sector scenarios generated results.")
+    
     
 # ---------- Monte Carlo CVaR ----------
 st.markdown("**Monte Carlo CVaR 95%**")
