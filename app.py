@@ -527,166 +527,291 @@ else:
 # ===================== D) Stress Testing — Sector & Systemic (auto severity) =====================
 st.subheader("D. Stress Testing — Sector & Systemic Impacts")
 
-# alias resolver + fallback
-def _norm(s:str)->str: return ''.join(ch for ch in s.lower() if ch.isalnum())
-MODEL_COL_MAP = { _norm(c): c for c in X_base.columns }
+# -------- Helpers: alias resolver (không đụng coverage ratios) ----------
+def _norm(s: str) -> str:
+    return ''.join(ch for ch in str(s).lower() if ch.isalnum())
+
+MODEL_COL_MAP = {_norm(c): c for c in X_base.columns}
 FEATURE_ALIAS = {
-    "ROA": ["roa","return_on_assets"], "ROE": ["roe","return_on_equity"],
-    "Gross_Margin": ["gross_margin","gm","grossmarginratio"],
-    "Net_Profit_Margin": ["net_profit_margin","npm","netmargin"],
-    "Debt_to_Assets": ["debt_to_assets","debtratio","debtassetsratio"],
-    "Debt_to_Equity": ["debt_to_equity","dte","deratio"],
-    "Total_Debt_to_EBITDA": ["debt_to_ebitda","total_debt_ebitda"],
-    "Operating_Income_to_Debt": ["operating_income_to_debt","op_income_debt"],
-    "Asset_Turnover": ["asset_turnover","at"],
-    "Receivables_Turnover": ["receivables_turnover","rt"],
-    "Inventory_Turnover": ["inventory_turnover","it"],
-    "Revenue_CAGR_3Y": ["revenue_cagr_3y","sales_cagr_3y","rev_cagr3y"],
-    "Current_Ratio": ["current_ratio","cr"], "Quick_Ratio": ["quick_ratio","qr"],
+    "ROA": ["roa", "return_on_assets"],
+    "ROE": ["roe", "return_on_equity"],
+    "Gross_Margin": ["gross_margin", "gm", "grossmarginratio"],
+    "Net_Profit_Margin": ["net_profit_margin", "npm", "netmargin"],
+    "Debt_to_Assets": ["debt_to_assets", "debtratio", "debtassetsratio"],
+    "Debt_to_Equity": ["debt_to_equity", "dte", "deratio"],
+    "Total_Debt_to_EBITDA": ["debt_to_ebitda", "total_debt_ebitda"],
+    "Operating_Income_to_Debt": ["operating_income_to_debt", "op_income_debt"],
+    "Asset_Turnover": ["asset_turnover", "at"],
+    "Receivables_Turnover": ["receivables_turnover", "rt"],
+    "Inventory_Turnover": ["inventory_turnover", "it"],
+    "Revenue_CAGR_3Y": ["revenue_cagr_3y", "sales_cagr_3y", "rev_cagr3y"],
+    "Current_Ratio": ["current_ratio", "cr"],
+    "Quick_Ratio": ["quick_ratio", "qr"],
 }
-def resolve_feature(name:str):
-    if name in X_base.columns: return name
+
+def resolve_feature(name: str):
+    if name in X_base.columns:
+        return name
     for alt in FEATURE_ALIAS.get(name, []):
         col = MODEL_COL_MAP.get(_norm(alt))
-        if col: return col
+        if col:
+            return col
     base = _norm(name)
+    # fuzzy
     for k, v in MODEL_COL_MAP.items():
-        if base in k or k in base: return v
+        if base in k or k in base:
+            return v
     return None
+
 def apply_multipliers(Xrow: pd.DataFrame, fmap: dict):
-    X = Xrow.copy(); hit=False
+    X = Xrow.copy()
+    hit = False
     for f, mult in fmap.items():
         col = resolve_feature(f)
-        if not col: continue
-        hit=True
-        try: X.at[X.index[0], col] = float(X.at[X.index[0], col]) * float(mult)
-        except Exception: pass
+        if not col:
+            continue
+        hit = True
+        try:
+            X.at[X.index[0], col] = float(X.at[X.index[0], col]) * float(mult)
+        except Exception:
+            pass
     return X, hit
+
 def _pd(model, Xrow):
     Xr = align_features_to_model(Xrow, model)
-    return float(model.predict_proba(Xr)[:,1][0]) if hasattr(model,"predict_proba") else float(model.predict(Xr)[0])
+    return float(model.predict_proba(Xr)[:, 1][0]) if hasattr(model, "predict_proba") else float(model.predict(Xr)[0])
 
-# Libraries (loại coverage ratios)
+def _logit(p, eps=1e-9):
+    p = float(np.clip(p, eps, 1 - eps))
+    return np.log(p / (1 - p))
+
+def _sigmoid(z):
+    z = float(z)
+    if z >= 35:  return 1.0
+    if z <= -35: return 0.0
+    return 1.0 / (1.0 + np.exp(-z))
+
+# -------- Sector & Systemic libraries (không dùng Interest_Coverage/EBITDA_to_Interest) ----------
 SECTOR_CRISES = {
     "Materials": [
-        ("Steel Price Collapse", {"Gross_Margin":0.88,"Net_Profit_Margin":0.85,"ROA":0.90,"ROE":0.90,"Revenue_CAGR_3Y":0.92,"Asset_Turnover":0.95,"Debt_to_Assets":1.05,"Debt_to_Equity":1.05}),
-        ("Energy Cost Surge", {"Gross_Margin":0.92,"Net_Profit_Margin":0.90,"ROA":0.92,"Current_Ratio":0.93,"Quick_Ratio":0.93}),
-        ("Supply Chain Disruptions", {"Inventory_Turnover":0.85,"Receivables_Turnover":0.92,"Asset_Turnover":0.93,"Revenue_CAGR_3Y":0.92})
+        ("Steel Price Collapse", {"Gross_Margin": 0.88, "Net_Profit_Margin": 0.85, "ROA": 0.90, "ROE": 0.90,
+                                  "Revenue_CAGR_3Y": 0.92, "Asset_Turnover": 0.95, "Debt_to_Assets": 1.05, "Debt_to_Equity": 1.05}),
+        ("Energy Cost Surge", {"Gross_Margin": 0.92, "Net_Profit_Margin": 0.90, "ROA": 0.92, "Current_Ratio": 0.93, "Quick_Ratio": 0.93}),
+        ("Supply Chain Disruptions", {"Inventory_Turnover": 0.85, "Receivables_Turnover": 0.92, "Asset_Turnover": 0.93, "Revenue_CAGR_3Y": 0.92})
     ],
-    "Energy": [("Oil Demand Crash", {"Gross_Margin":0.92,"Net_Profit_Margin":0.88,"ROA":0.90,"ROE":0.90})],
+    "Energy": [
+        ("Oil Demand Crash", {"Gross_Margin": 0.92, "Net_Profit_Margin": 0.88, "ROA": 0.90, "ROE": 0.90}),
+        ("Pipeline/Field Outage", {"Revenue_CAGR_3Y": 0.90, "ROA": 0.92})
+    ],
     "Real Estate": [
-        ("Credit Tightening", {"Debt_to_Assets":1.12,"Debt_to_Equity":1.12,"Current_Ratio":0.92,"Quick_Ratio":0.90,"ROA":0.92}),
-        ("Property Price Correction", {"Net_Profit_Margin":0.88,"Revenue_CAGR_3Y":0.88,"ROE":0.90})
+        ("Credit Tightening", {"Debt_to_Assets": 1.12, "Debt_to_Equity": 1.12, "Current_Ratio": 0.92, "Quick_Ratio": 0.90, "ROA": 0.92}),
+        ("Property Price Correction", {"Net_Profit_Margin": 0.88, "Revenue_CAGR_3Y": 0.88, "ROE": 0.90})
     ],
     "Technology": [
-        ("Valuation Reset", {"Net_Profit_Margin":0.95,"ROE":0.93,"ROA":0.95}),
-        ("Supply Chain Disruptions", {"Inventory_Turnover":0.88,"Receivables_Turnover":0.92,"Asset_Turnover":0.94,"Revenue_CAGR_3Y":0.93}),
-        ("US–China Tariffs (export)", {"Gross_Margin":0.95,"Net_Profit_Margin":0.93,"Asset_Turnover":0.97,"Receivables_Turnover":0.95})
+        ("Valuation Reset", {"Net_Profit_Margin": 0.95, "ROE": 0.93, "ROA": 0.95}),
+        ("Semiconductor Shortage", {"Inventory_Turnover": 0.88, "Receivables_Turnover": 0.92, "Asset_Turnover": 0.94, "Revenue_CAGR_3Y": 0.93}),
+        ("US–China Tariffs (export)", {"Gross_Margin": 0.95, "Net_Profit_Margin": 0.93, "Asset_Turnover": 0.97, "Receivables_Turnover": 0.95})
     ],
-    "Consumer Discretionary": [("COVID Demand Shock", {"Revenue_CAGR_3Y":0.85,"Gross_Margin":0.92,"Net_Profit_Margin":0.85,"ROA":0.88,"ROE":0.88})],
-    "Consumer Staples": [("Energy Price Shock", {"Gross_Margin":0.94,"ROA":0.96})],
-    "Industrials": [("Logistics/Supply Chain", {"Asset_Turnover":0.93,"Inventory_Turnover":0.88,"Receivables_Turnover":0.92})],
-    "Utilities": [("Regulatory Tightening", {"ROA":0.95,"ROE":0.95})],
-    "Financials": [("Credit Loss Cycle", {"ROE":0.92,"ROA":0.94})],
-    "Healthcare": [("Reimbursement Pressure", {"Net_Profit_Margin":0.95,"ROA":0.96})],
-    "Telecom": [("Capex Cycle Upswing", {"ROE":0.95,"ROA":0.96})],
-    "Transportation": [("COVID Travel Collapse", {"Revenue_CAGR_3Y":0.80,"Asset_Turnover":0.90,"ROA":0.85})],
-    "Hospitality & Travel": [("Tourism Freeze", {"Revenue_CAGR_3Y":0.78,"Gross_Margin":0.90,"ROA":0.85})],
-    "Agriculture & Fisheries": [("Export Shock", {"Revenue_CAGR_3Y":0.88,"Gross_Margin":0.92})],
-    "Automotive": [("Semiconductor Shortage", {"Inventory_Turnover":0.85,"Asset_Turnover":0.92})],
-    "Other": [("Generic Sector Shock", {"ROA":0.95,"Net_Profit_Margin":0.95,"Revenue_CAGR_3Y":0.95})]
+    "Consumer Discretionary": [
+        ("COVID Demand Shock", {"Revenue_CAGR_3Y": 0.85, "Gross_Margin": 0.92, "Net_Profit_Margin": 0.85, "ROA": 0.88, "ROE": 0.88})
+    ],
+    "Consumer Staples": [
+        ("Energy Price Shock", {"Gross_Margin": 0.94, "ROA": 0.96}),
+        ("Food Input Spike", {"Gross_Margin": 0.92, "Net_Profit_Margin": 0.93})
+    ],
+    "Industrials": [
+        ("Logistics/Supply Chain", {"Asset_Turnover": 0.93, "Inventory_Turnover": 0.88, "Receivables_Turnover": 0.92})
+    ],
+    "Utilities": [
+        ("Regulatory Tightening", {"ROA": 0.95, "ROE": 0.95})
+    ],
+    "Financials": [
+        ("Credit Loss Cycle", {"ROE": 0.92, "ROA": 0.94})
+    ],
+    "Healthcare": [
+        ("Reimbursement Pressure", {"Net_Profit_Margin": 0.95, "ROA": 0.96})
+    ],
+    "Telecom": [
+        ("Capex Cycle Upswing", {"ROE": 0.95, "ROA": 0.96})
+    ],
+    "Transportation": [
+        ("COVID Travel Collapse", {"Revenue_CAGR_3Y": 0.80, "Asset_Turnover": 0.90, "ROA": 0.85})
+    ],
+    "Hospitality & Travel": [
+        ("Tourism Freeze", {"Revenue_CAGR_3Y": 0.78, "Gross_Margin": 0.90, "ROA": 0.85})
+    ],
+    "Agriculture & Fisheries": [
+        ("Export Shock", {"Revenue_CAGR_3Y": 0.88, "Gross_Margin": 0.92})
+    ],
+    "Automotive": [
+        ("Semiconductor Shortage", {"Inventory_Turnover": 0.85, "Asset_Turnover": 0.92})
+    ],
+    "Other": [
+        ("Generic Sector Shock", {"ROA": 0.95, "Net_Profit_Margin": 0.95, "Revenue_CAGR_3Y": 0.95})
+    ]
 }
+
+# độ nhạy theo bucket (>=1 làm nặng hơn)
+SECTOR_SENS_WEIGHT = {
+    "Real Estate": 1.35, "Materials": 1.25, "Energy": 1.25,
+    "Consumer Discretionary": 1.20, "Industrials": 1.15,
+    "Consumer Staples": 1.05, "Utilities": 1.00, "Financials": 1.00,
+    "Technology": 1.15, "Healthcare": 1.00, "Telecom": 1.05,
+    "Transportation": 1.30, "Hospitality & Travel": 1.35,
+    "Agriculture & Fisheries": 1.10, "Automotive": 1.20,
+    "Other": 1.00
+}
+
 SYSTEMIC_CRISES = [
-    ("Global Financial Crisis", {"Net_Profit_Margin":0.90,"ROA":0.90,"ROE":0.88,"Current_Ratio":0.95,"Quick_Ratio":0.95,"Debt_to_Assets":1.10,"Operating_Income_to_Debt":0.85,"Revenue_CAGR_3Y":0.90}),
-    ("Interest Rate +300bps", {"Debt_to_Equity":1.12,"Debt_to_Assets":1.06,"Operating_Income_to_Debt":0.85}),
-    ("Government Tightening", {"Current_Ratio":0.90,"Quick_Ratio":0.90,"ROA":0.90,"Debt_to_Assets":1.10}),
-    ("Market Liquidity Crisis", {"Revenue_CAGR_3Y":0.95,"Net_Profit_Margin":0.92}),
-    ("US–China Tariffs (broad)", {"Gross_Margin":0.96,"Net_Profit_Margin":0.95,"Asset_Turnover":0.98})
+    ("Global Financial Crisis", {"Net_Profit_Margin": 0.90, "ROA": 0.90, "ROE": 0.88,
+                                 "Current_Ratio": 0.95, "Quick_Ratio": 0.95,
+                                 "Debt_to_Assets": 1.10, "Operating_Income_to_Debt": 0.85,
+                                 "Revenue_CAGR_3Y": 0.90}),
+    ("Interest Rate +300bps", {"Debt_to_Equity": 1.12, "Debt_to_Assets": 1.06, "Operating_Income_to_Debt": 0.85}),
+    ("Government Tightening", {"Current_Ratio": 0.90, "Quick_Ratio": 0.90, "ROA": 0.90, "Debt_to_Assets": 1.10}),
+    ("Market Liquidity Crisis", {"Revenue_CAGR_3Y": 0.95, "Net_Profit_Margin": 0.92}),
+    ("US–China Tariffs (broad)", {"Gross_Margin": 0.96, "Net_Profit_Margin": 0.95, "Asset_Turnover": 0.98})
 ]
 
-# Auto severity theo hồ sơ DN + sector + sàn + per-ticker
-base_sev = 1.15
-if sector_bucket in ["Real Estate","Materials","Consumer Discretionary"]: base_sev += 0.10
-if exchange == "UPCOM": base_sev += 0.10
+# -------- Firm sensitivity & severity (deterministic theo ticker/year) --------
+# Seed để kết quả ổn định theo mã & năm
+_seed = int(abs(hash(f"{ticker}-{year}")) % (2**32 - 1))
+rng = np.random.default_rng(_seed)
+
+# firm sensitivity dựa trên flags từ phần B (đã tính)
+firm_sens = 1.0
+for cond, w in [
+    ("dta_hi", 0.12), ("dte_hi", 0.10), ("netde_hi", 0.08),
+    ("cr_low", 0.08), ("qr_low", 0.05),
+    ("roa_neg", 0.10), ("roe_neg", 0.06), ("npm_neg", 0.06), ("rev_cagr_neg", 0.06),
+    ("assets_q40", 0.05), ("revenue_q40", 0.03)
+]:
+    if flags.get(cond, False): firm_sens += w
+if exchange == "UPCOM": firm_sens += 0.10
+firm_sens = float(np.clip(firm_sens, 1.0, 1.8))
+
+sector_weight = SECTOR_SENS_WEIGHT.get(sector_bucket, 1.00)
+
+# per-ticker severity boost
 sev_ticker = float(TICKER_OVERRIDES.get(str(ticker), {}).get("severity_boost", 0.0))
-risk_multiplier = 1.0 + (risk_intensity - 1.0)
-SEVERITY = float(np.clip((1.0 + sev_ticker) * base_sev * risk_multiplier, 1.0, 2.8))
 
-st.caption(f"Sector raw: {sector_raw or '-'} → Bucket: **{sector_bucket}** • Severity used: **×{SEVERITY:.2f}**")
+# tổng severity
+SEVERITY = float(np.clip(1.0 * firm_sens * sector_weight * (1.0 + sev_ticker), 1.0, 3.0))
 
+st.caption(
+    f"Sector raw: {sector_raw or '-'} → Bucket: **{sector_bucket}** • Firm sensitivity: **×{firm_sens:.2f}** • Severity used: **×{SEVERITY:.2f}**"
+)
+
+# -------- Stress engine --------
 pd_base_stress = _pd(model, X_base)
 logit_base = _logit(pd_base_stress)
 
 def _scale_map(base_map: dict, k: float) -> dict:
-    return {feat: float(np.clip(1.0 + (mult - 1.0) * k, 0.5, 1.9)) for feat, mult in base_map.items()}
+    # co giãn theo severity; clamp để tránh nổ số
+    return {feat: float(np.clip(1.0 + (mult - 1.0) * k, 0.4, 1.9)) for feat, mult in base_map.items()}
 
 def scenario_pd(fmap, sys_weight=1.0):
-    fmap_scaled = _scale_map(fmap, SEVERITY)
+    fmap_scaled = _scale_map(fmap, SEVERITY * sys_weight)
     Xs, hit = apply_multipliers(X_base, fmap_scaled)
     if hit:
         return _pd(model, Xs), True
-    # fallback: logit bump nếu không chạm cột nào
-    bump = 0.7 * SEVERITY * sys_weight
+    # fallback: logit bump có kiểm soát (đảm bảo không 0%)
+    bump = 0.6 * SEVERITY * sys_weight
     return _sigmoid(logit_base + bump), False
 
-# Sector
+# -------- Sector scenarios (đảm bảo luôn có) --------
+sector_list = SECTOR_CRISES.get(sector_bucket, SECTOR_CRISES["Other"])
 rows_sector = []
-for nm, fmap in SECTOR_CRISES.get(sector_bucket, SECTOR_CRISES["Other"]):
-    pd_sc, _ = scenario_pd(fmap, 1.0)
-    rows_sector.append({"Scenario": nm, "PD": pd_sc, "Impact_%": (pd_sc - pd_base_stress)/pd_base_stress*100.0 if pd_base_stress>0 else np.nan})
-df_sector = pd.DataFrame(rows_sector).sort_values("Impact_%", ascending=True)
+for nm, fmap in sector_list:
+    pd_sc, hit = scenario_pd(fmap, 1.0)
+    impact = (pd_sc - pd_base_stress) / pd_base_stress * 100.0 if pd_base_stress > 0 else np.nan
+    rows_sector.append({"Scenario": nm, "PD": pd_sc, "Impact_%": impact, "HitFeatures": hit})
+df_sector = pd.DataFrame(rows_sector).sort_values("Impact_%", ascending=False)
 
-# Systemic
+# -------- Systemic scenarios --------
 rows_sys = []
 for nm, fmap in SYSTEMIC_CRISES:
-    pd_sc, _ = scenario_pd(fmap, 0.8)
-    rows_sys.append({"Scenario": nm, "PD": pd_sc, "Impact_%": (pd_sc - pd_base_stress)/pd_base_stress*100.0 if pd_base_stress>0 else np.nan})
-df_sys = pd.DataFrame(rows_sys).sort_values("Impact_%", ascending=True)
+    pd_sc, hit = scenario_pd(fmap, 0.9)
+    impact = (pd_sc - pd_base_stress) / pd_base_stress * 100.0 if pd_base_stress > 0 else np.nan
+    rows_sys.append({"Scenario": nm, "PD": pd_sc, "Impact_%": impact, "HitFeatures": hit})
+df_sys = pd.DataFrame(rows_sys).sort_values("Impact_%", ascending=False)
 
-# Monte Carlo
+# -------- Monte Carlo (ổn định + nhanh) --------
 ref_df = load_train_reference()
 try:
     ref_df = ref_df if isinstance(ref_df, pd.DataFrame) else feats_df
-    mc = mc_cvar_pd(model, X_base, ref_df, sims=4000, alpha=0.95, clip_q=(0.01,0.99))
+    # dùng seed cố định
+    np.random.seed(_seed)
+    mc = mc_cvar_pd(model, X_base, ref_df, sims=3500, alpha=0.95, clip_q=(0.01, 0.99))
     pd_var = float(mc["VaR"]); pd_cvar = float(mc["CVaR"])
 except Exception:
     mc = {"PD_sims": np.array([])}; pd_var = np.nan; pd_cvar = np.nan
 
-# Charts
-c1, c2 = st.columns(2)
-with c1:
+# -------- Charts (dùng show_plotly để tránh deprecated args) --------
+col1, col2 = st.columns(2)
+with col1:
     if not df_sector.empty:
         f1 = go.Figure()
-        f1.add_trace(go.Bar(x=df_sector["Scenario"], y=df_sector["Impact_%"],
-                            text=[f"{v:.1f}%" if np.isfinite(v) else "-" for v in df_sector["Impact_%"]],
-                            textposition="outside"))
-        f1.update_layout(title=f"Sector Impact — ΔPD vs Baseline (%) • {sector_bucket}",
-                         yaxis=dict(title="Impact (%)"),
-                         height=360, margin=dict(l=10, r=10, t=40, b=80))
-        show_plotly(f1, "chart_sector_impact")
-with c2:
+        f1.add_trace(go.Bar(
+            x=df_sector["Scenario"], y=df_sector["Impact_%"],
+            text=[f"{v:+.1f}%" if np.isfinite(v) else "-" for v in df_sector["Impact_%"]],
+            textposition="outside"
+        ))
+        f1.update_layout(
+            title=f"Sector Impact — ΔPD vs Baseline (%) • {sector_bucket}",
+            yaxis=dict(title="Impact (%)"),
+            height=340, margin=dict(l=10, r=10, t=48, b=80)
+        )
+        show_plotly(f1, f"sector_impact_{ticker}_{year}")
+
+with col2:
     if not df_sys.empty:
         f2 = go.Figure()
-        f2.add_trace(go.Bar(x=df_sys["Scenario"], y=df_sys["Impact_%"],
-                            text=[f"{v:.1f}%" if np.isfinite(v) else "-" for v in df_sys["Impact_%"]],
-                            textposition="outside"))
-        f2.update_layout(title="Systemic Impact — ΔPD vs Baseline (%)",
-                         yaxis=dict(title="Impact (%)"),
-                         height=360, margin=dict(l=10, r=10, t=40, b=80))
-        show_plotly(f2, "chart_systemic_impact")
+        f2.add_trace(go.Bar(
+            x=df_sys["Scenario"], y=df_sys["Impact_%"],
+            text=[f"{v:+.1f}%" if np.isfinite(v) else "-" for v in df_sys["Impact_%"]],
+            textposition="outside"
+        ))
+        f2.update_layout(
+            title="Systemic Impact — ΔPD vs Baseline (%)",
+            yaxis=dict(title="Impact (%)"),
+            height=340, margin=dict(l=10, r=10, t=48, b=80), xaxis_tickangle=-35
+        )
+        show_plotly(f2, f"systemic_impact_{ticker}_{year}")
 
+# Monte Carlo
 if isinstance(mc.get("PD_sims"), np.ndarray) and mc["PD_sims"].size:
     f3 = go.Figure()
     f3.add_trace(go.Histogram(x=mc["PD_sims"], nbinsx=40))
     f3.add_vline(x=pd_var, line_width=2, line_dash="dash", line_color="orange")
     f3.add_vline(x=pd_cvar, line_width=2, line_dash="dot", line_color="red")
-    f3.update_layout(title="Monte Carlo — PD sims (VaR 95% orange, CVaR 95% red)",
-                     xaxis_title="PD", yaxis_title="Count",
-                     height=360, margin=dict(l=10, r=10, t=40, b=40))
-    show_plotly(f3, "chart_mc_pd")
+    f3.update_layout(
+        title="Monte Carlo — PD sims (VaR 95% orange, CVaR 95% red)",
+        xaxis_title="PD", yaxis_title="Count",
+        height=340, margin=dict(l=10, r=10, t=48, b=40)
+    )
+    show_plotly(f3, f"mc_pd_{ticker}_{year}")
 
+# -------- KPIs --------
 k1, k2, k3 = st.columns(3)
 with k1: st.metric("Baseline PD (post-adj in B)", f"{pd_final:.2%}")
-with k2: st.metric("Max PD under crises",
-                   f"{max(df_sector['PD'].max() if not df_sector.empty else 0.0, df_sys['PD'].max() if not df_sys.empty else 0.0):.2%}")
+with k2: 
+    max_pd_stress = max(
+        df_sector["PD"].max() if not df_sector.empty else 0.0,
+        df_sys["PD"].max() if not df_sys.empty else 0.0
+    )
+    st.metric("Max PD under crises", f"{max_pd_stress:.2%}")
 with k3: st.metric("CVaR 95% (PD)", f"{pd_cvar:.2%}" if np.isfinite(pd_cvar) else "-")
+
+# -------- Scenario table (optional, giúp kiểm tra đã hit feature hay fallback) --------
+with st.expander("Scenario details (debug)"):
+    try:
+        df_show = pd.concat(
+            [df_sector.assign(Type="Sector"), df_sys.assign(Type="Systemic")],
+            ignore_index=True
+        )[["Type","Scenario","PD","Impact_%","HitFeatures"]]
+        df_show["PD"] = df_show["PD"].map(lambda v: f"{v:.2%}")
+        df_show["Impact_%"] = df_show["Impact_%"].map(lambda v: f"{v:+.1f}%" if np.isfinite(v) else "-")
+        st.dataframe(df_show, hide_index=True, use_container_width=True)
+    except Exception:
+        st.info("No scenario details.")
