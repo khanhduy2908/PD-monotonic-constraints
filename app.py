@@ -430,8 +430,8 @@ thr = thresholds_for_sector(load_thresholds("models/threshold.json"), sector_raw
 
 def policy_band(pd_val: float, thr_dict: dict) -> str:
     """Return 'Low' / 'Medium' / 'High' theo thr['low'], thr['medium'] (có fallback an toàn)."""
-    low = float(thr_dict.get("low", 0.10))
-    med = float(thr_dict.get("medium", 0.30))
+    low = float(thr_dict.get("low", 0.20))
+    med = float(thr_dict.get("medium", 0.50))
     try:
         pv = float(pd_val)
     except Exception:
