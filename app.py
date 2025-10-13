@@ -25,6 +25,11 @@ from utils.visualization import (
     default_distribution_by_year,
     default_distribution_by_sector,
 )
+from utils.stress_testing import (
+    detect_sector_alias, exchange_intensity,
+    apply_sector_crisis_row, apply_systemic_shock_row,
+    systemic_sigma, monte_carlo_cvar_pd
+)
 
 # ===================== Page config & minimal styling =====================
 st.set_page_config(page_title="Corporate Default Risk Scoring", layout="wide")
@@ -352,68 +357,71 @@ else:
 
 # ---------- D) Stress Testing (three scenarios side-by-side) ----------
 st.subheader("D. Stress Testing")
-# 1) Sector-specific crisis (σ-map by sector, scaled by exchange nuance)
-sector_map = SECTOR_SCENARIOS.get(sector_alias, SECTOR_SCENARIOS["__default__"])
-k_scale = EXCHANGE_SHOCK_ADJUST.get(exchange, 1.0)
-# 2) Systemic crisis (generic market shock 2σ, tuned by sector)
-sys_k = systemic_crisis_sigma(sector_alias)
-# 3) Monte Carlo CVaR 95%
-features_order = list(X_base.columns)
-stats = stats_all.loc[stats_all.index.intersection(features_order)]
 
-def predict_pd_from_vec(vec):
-    X = _safe_df(pd.DataFrame([vec], columns=features_order))
-    if hasattr(model, "predict_proba"):
-        return float(model.predict_proba(X)[:,1][0])
-    return float(model.predict(X)[0])
+# Reference for covariance (Monte Carlo)
+reference = load_train_reference()
+reference = reference if reference is not None else features_df
 
-# Sector-specific shock
-vec_sector = apply_sigma_shock_vector(base_vec, features_order, stats, sector_map, intensity_scale=k_scale)
-pd_sector = predict_pd_from_vec(vec_sector)
-t_sector = pd.DataFrame([{"Scenario":"Sector Crisis","PD":pd_sector,"ΔPD":pd_sector-pd_base}])
+# Sector alias & exchange nuance
+sector_alias = detect_sector_alias(sector_raw)
+ex_int = exchange_intensity(exchange)
 
-# Systemic crisis
-vec_sys = apply_market_shock_vector(base_vec, features_order, stats, k_sigma=sys_k)
-pd_sys = predict_pd_from_vec(vec_sys)
-t_sys = pd.DataFrame([{"Scenario":f"Systemic Crisis ({sys_k:.1f}σ)","PD":pd_sys,"ΔPD":pd_sys-pd_base}])
+# 1) Sector Crisis (sector-specific; deterministic)
+X_sector = apply_sector_crisis_row(X_base, sector_alias=sector_alias, exch_intensity=ex_int)
+if hasattr(model, "predict_proba"):
+    pd_sector = float(model.predict_proba(X_sector)[:,1][0])
+else:
+    pd_sector = float(model.predict(X_sector)[0])
 
-# Monte Carlo CVaR
-mc = monte_carlo_cvar_pd(model, base_vec, features_order, stats, sims=3000, alpha=0.95)
-t_mc = pd.DataFrame([
-    {"Scenario":"Monte Carlo CVaR 95%","PD":mc["CVaR"],"ΔPD":mc["CVaR"]-pd_base},
-    {"Scenario":"VaR 95%","PD":mc["VaR"],"ΔPD":mc["VaR"]-pd_base},
-])
+# 2) Systemic Crisis (σ-based; common to all sectors)
+k_sys = systemic_sigma(sector_alias)
+X_sys = apply_systemic_shock_row(X_base, reference_df=reference, k_sigma=k_sys)
+if hasattr(model, "predict_proba"):
+    pd_sys = float(model.predict_proba(X_sys)[:,1][0])
+else:
+    pd_sys = float(model.predict(X_sys)[0])
 
-# Layout 3 columns
-cA, cB, cC = st.columns(3)
+# 3) Monte Carlo CVaR 95% (correlated, clipped)
+mc = monte_carlo_cvar_pd(model, X_base, reference_df=reference, sims=5000, alpha=0.95)
+pd_var, pd_cvar = mc["VaR"], mc["CVaR"]
 
+# ---- Layout: 2x2 charts (no tables) ----
+cA, cB = st.columns(2)
 with cA:
     st.markdown("**Sector Crisis (sector-specific)**")
-    st.table(t_sector.style.format({"PD":"{:.2%}","ΔPD":"{:+.2%}"}))
     figA = go.Figure()
-    figA.add_trace(go.Bar(x=["Baseline","Sector Crisis"], y=[pd_base, pd_sector]))
-    figA.update_layout(title="PD — Sector Crisis", showlegend=False)
+    figA.add_trace(go.Bar(x=["Sector Crisis"], y=[pd_sector]))
+    figA.update_layout(yaxis=dict(tickformat=".0%"), title=f"Sector: {sector_alias}")
     st.plotly_chart(figA, use_container_width=True)
 
 with cB:
-    st.markdown(f"**Systemic Crisis ({sys_k:.1f}σ)**")
-    st.table(t_sys.style.format({"PD":"{:.2%}","ΔPD":"{:+.2%}"}))
+    st.markdown(f"**Systemic Crisis ({k_sys:.1f}σ)**")
     figB = go.Figure()
-    figB.add_trace(go.Bar(x=["Baseline",f"Systemic {sys_k:.1f}σ"], y=[pd_base, pd_sys]))
-    figB.update_layout(title="PD — Systemic Crisis", showlegend=False)
+    figB.add_trace(go.Bar(x=[f"Systemic {k_sys:.1f}σ"], y=[pd_sys]))
+    figB.update_layout(yaxis=dict(tickformat=".0%"), title="Market-wide shock")
     st.plotly_chart(figB, use_container_width=True)
 
+cC, cD = st.columns(2)
 with cC:
     st.markdown("**Monte Carlo CVaR 95%**")
-    st.table(t_mc.style.format({"PD":"{:.2%}","ΔPD":"{:+.2%}"}))
-    hist = np.histogram(mc["PD_sims"], bins=30)
+    hist = np.histogram(mc["PD_sims"], bins=40)
     centers = (hist[1][1:]+hist[1][:-1])/2
     figC = go.Figure()
     figC.add_trace(go.Bar(x=centers, y=hist[0]))
-    figC.add_vline(x=mc["VaR"], line_width=2, line_dash="dash", line_color="red")
-    figC.add_vline(x=mc["CVaR"], line_width=2, line_dash="dot", line_color="black")
-    figC.update_layout(title="PD distribution with VaR/CVaR", xaxis_title="PD", yaxis_title="Frequency")
+    figC.add_vline(x=pd_var, line_width=2, line_dash="dash", line_color="red")
+    figC.add_vline(x=pd_cvar, line_width=2, line_dash="dot", line_color="black")
+    figC.update_layout(
+        title="PD distribution (VaR 95% in red, CVaR 95% in black)",
+        xaxis_title="PD", yaxis_title="Frequency"
+    )
     st.plotly_chart(figC, use_container_width=True)
+
+with cD:
+    # Key numbers as clean metrics (no tables)
+    st.metric("Sector Crisis PD", f"{pd_sector:.2%}")
+    st.metric("Systemic Crisis PD", f"{pd_sys:.2%}")
+    st.metric("Monte Carlo VaR 95%", f"{pd_var:.2%}")
+    st.metric("Monte Carlo CVaR 95%", f"{pd_cvar:.2%}")
 
 # ---------- E) PSI Drift (always on; fallback to in-sample baseline) ----------
 st.subheader("E. Drift Monitoring (PSI)")
