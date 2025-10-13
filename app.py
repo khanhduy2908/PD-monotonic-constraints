@@ -382,6 +382,7 @@ if not sector_raw or pd.isna(sector_raw.strip()):
 st.write(f"Sector raw: {sector_raw}")  # Display sector for debugging purposes
 
 # ------ Define realistic sector-specific crisis scenarios --------
+# Define realistic sector-specific crisis scenarios
 SECTOR_CRISIS_SCENARIOS = {
     "Technology": {
         "Tech Crunch": {
@@ -441,62 +442,18 @@ SECTOR_CRISIS_SCENARIOS = {
             "Sentiment Score": 0.70
         }
     },
-    "Financials": {
-        "Credit Loss Surge": {
-            "Revenue_CAGR_3Y": 0.80,
-            "ROA": 0.75,
-            "Net_Profit_Margin": 0.70,
-            "Interest_Coverage": 0.60,
-            "Debt_to_Equity": 1.10,
-            "EBITDA_to_Interest": 0.75,
-            "Sentiment Score": 0.80
-        },
-        "Interest Rate Shock": {
+    # Add more specific scenarios for other sectors here
+
+    # Default fallback for sectors not defined in the dictionary
+    "__default__": {
+        "General Crisis": {
             "Revenue_CAGR_3Y": 0.70,
             "ROA": 0.65,
             "Net_Profit_Margin": 0.60,
-            "Interest_Coverage": 0.70,
-            "Debt_to_Equity": 1.25,
-            "EBITDA_to_Interest": 0.70,
-            "Sentiment Score": 0.75
-        },
-        "Liquidity Crisis": {
-            "Revenue_CAGR_3Y": 0.75,
-            "ROA": 0.70,
-            "Net_Profit_Margin": 0.65,
             "Interest_Coverage": 0.65,
             "Debt_to_Equity": 1.20,
-            "EBITDA_to_Interest": 0.80,
-            "Sentiment Score": 0.70
-        }
-    },
-    "Energy": {
-        "Oil Price Drop": {
-            "Revenue_CAGR_3Y": 0.60,
-            "ROA": 0.50,
-            "Net_Profit_Margin": 0.45,
-            "Interest_Coverage": 0.55,
-            "Debt_to_Equity": 1.30,
-            "EBITDA_to_Interest": 0.60,
+            "EBITDA_to_Interest": 0.70,
             "Sentiment Score": 0.60
-        },
-        "Supply Disruption": {
-            "Revenue_CAGR_3Y": 0.65,
-            "ROA": 0.55,
-            "Net_Profit_Margin": 0.50,
-            "Interest_Coverage": 0.60,
-            "Debt_to_Equity": 1.25,
-            "EBITDA_to_Interest": 0.65,
-            "Sentiment Score": 0.65
-        },
-        "Government Policy Change": {
-            "Revenue_CAGR_3Y": 0.70,
-            "ROA": 0.60,
-            "Net_Profit_Margin": 0.55,
-            "Interest_Coverage": 0.65,
-            "Debt_to_Equity": 1.20,
-            "EBITDA_to_Interest": 0.70,
-            "Sentiment Score": 0.70
         }
     }
 }
