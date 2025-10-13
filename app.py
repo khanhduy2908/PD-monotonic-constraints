@@ -374,51 +374,161 @@ else:
 # ===================== D) Stress Testing (Factor-level, sector & systemic) =====================
 st.subheader("D. Stress Testing")
 
-# Check if sector_raw is valid and not empty
+# Ensure sector_raw is valid and not empty
 if not sector_raw or pd.isna(sector_raw.strip()):
     sector_raw = "__default__"  # Default value for invalid or empty sector
 
 # Debugging: log the sector_raw value
 st.write(f"Sector raw: {sector_raw}")  # Display sector for debugging purposes
 
-# Proceed to run sector and systemic scenarios based on sector_raw
-try:
-    sector_scenarios_raw = build_sector_scenarios(sector_raw)
-    systemic_scenarios_raw = SYSTEMIC_FACTORS
-except Exception as e:
-    st.error(f"Error building scenarios: {e}")
-    st.stop()
+# ------ Define realistic sector-specific crisis scenarios --------
+SECTOR_CRISIS_SCENARIOS = {
+    "Technology": {
+        "Tech Crunch": {
+            "Revenue_CAGR_3Y": 0.70,  # Impacted by market slowdowns
+            "ROA": 0.60,              # Decreased profitability
+            "Net_Profit_Margin": 0.50, # Lower margins
+            "Interest_Coverage": 0.70,
+            "Debt_to_Equity": 1.05,
+            "EBITDA_to_Interest": 0.65,
+            "Sentiment Score": 0.70    # Sentiment downturn
+        },
+        "Supply Chain Disruption": {
+            "Revenue_CAGR_3Y": 0.80,
+            "ROA": 0.75,
+            "Net_Profit_Margin": 0.70,
+            "Interest_Coverage": 0.75,
+            "Debt_to_Equity": 1.10,
+            "EBITDA_to_Interest": 0.75,
+            "Sentiment Score": 0.75
+        },
+        "Pandemic Shock": {
+            "Revenue_CAGR_3Y": 0.60,
+            "ROA": 0.55,
+            "Net_Profit_Margin": 0.50,
+            "Interest_Coverage": 0.60,
+            "Debt_to_Equity": 1.15,
+            "EBITDA_to_Interest": 0.60,
+            "Sentiment Score": 0.65
+        }
+    },
+    "Real Estate": {
+        "Housing Downturn": {
+            "Revenue_CAGR_3Y": 0.75,  # Impact of lower sales
+            "ROA": 0.65,              # Profitability decrease
+            "Net_Profit_Margin": 0.60,
+            "Interest_Coverage": 0.70,
+            "Debt_to_Equity": 1.30,
+            "EBITDA_to_Interest": 0.80,
+            "Sentiment Score": 0.60
+        },
+        "Credit Crunch": {
+            "Revenue_CAGR_3Y": 0.70,
+            "ROA": 0.60,
+            "Net_Profit_Margin": 0.55,
+            "Interest_Coverage": 0.65,
+            "Debt_to_Equity": 1.25,
+            "EBITDA_to_Interest": 0.75,
+            "Sentiment Score": 0.65
+        },
+        "Government Policy Change": {
+            "Revenue_CAGR_3Y": 0.80,
+            "ROA": 0.70,
+            "Net_Profit_Margin": 0.65,
+            "Interest_Coverage": 0.75,
+            "Debt_to_Equity": 1.20,
+            "EBITDA_to_Interest": 0.85,
+            "Sentiment Score": 0.70
+        }
+    },
+    "Financials": {
+        "Credit Loss Surge": {
+            "Revenue_CAGR_3Y": 0.80,
+            "ROA": 0.75,
+            "Net_Profit_Margin": 0.70,
+            "Interest_Coverage": 0.60,
+            "Debt_to_Equity": 1.10,
+            "EBITDA_to_Interest": 0.75,
+            "Sentiment Score": 0.80
+        },
+        "Interest Rate Shock": {
+            "Revenue_CAGR_3Y": 0.70,
+            "ROA": 0.65,
+            "Net_Profit_Margin": 0.60,
+            "Interest_Coverage": 0.70,
+            "Debt_to_Equity": 1.25,
+            "EBITDA_to_Interest": 0.70,
+            "Sentiment Score": 0.75
+        },
+        "Liquidity Crisis": {
+            "Revenue_CAGR_3Y": 0.75,
+            "ROA": 0.70,
+            "Net_Profit_Margin": 0.65,
+            "Interest_Coverage": 0.65,
+            "Debt_to_Equity": 1.20,
+            "EBITDA_to_Interest": 0.80,
+            "Sentiment Score": 0.70
+        }
+    },
+    "Energy": {
+        "Oil Price Drop": {
+            "Revenue_CAGR_3Y": 0.60,
+            "ROA": 0.50,
+            "Net_Profit_Margin": 0.45,
+            "Interest_Coverage": 0.55,
+            "Debt_to_Equity": 1.30,
+            "EBITDA_to_Interest": 0.60,
+            "Sentiment Score": 0.60
+        },
+        "Supply Disruption": {
+            "Revenue_CAGR_3Y": 0.65,
+            "ROA": 0.55,
+            "Net_Profit_Margin": 0.50,
+            "Interest_Coverage": 0.60,
+            "Debt_to_Equity": 1.25,
+            "EBITDA_to_Interest": 0.65,
+            "Sentiment Score": 0.65
+        },
+        "Government Policy Change": {
+            "Revenue_CAGR_3Y": 0.70,
+            "ROA": 0.60,
+            "Net_Profit_Margin": 0.55,
+            "Interest_Coverage": 0.65,
+            "Debt_to_Equity": 1.20,
+            "EBITDA_to_Interest": 0.70,
+            "Sentiment Score": 0.70
+        }
+    }
+}
 
-# Scale the scenarios using severity and exchange intensity
-sector_scenarios = {name: scale_multiplier(m, sev, exch_intensity) for name, m in sector_scenarios_raw.items()}
-systemic_scenarios = {name: scale_multiplier(m, sev, exch_intensity) for name, m in systemic_scenarios_raw.items()}
-
-# Ensure we have valid data for feature columns
-X_base_row = align_features_to_model(X_base.copy(), model)
-
-# Run the stress scenarios and plot the results
-df_sector = run_scenarios(model, X_base_row, sector_scenarios)
-df_sys = run_scenarios(model, X_base_row, systemic_scenarios)
-
-# Visualization for sector and systemic scenarios
-cA, cB = st.columns(2)
-with cA:
-    if not df_sector.empty:
-        figS = go.Figure()
-        figS.add_trace(go.Bar(x=df_sector["Scenario"], y=df_sector["PD"]))
-        figS.update_layout(title=f"Sector Crisis — {sector_raw}", yaxis=dict(tickformat=".0%"), height=340)
-        st.plotly_chart(figS, use_container_width=True)
+# -------------------------------------------------------------
+# Select appropriate sector-based stress scenarios based on user input
+def build_sector_scenarios(sector_name: str) -> dict:
+    if sector_name in SECTOR_CRISIS_SCENARIOS:
+        return SECTOR_CRISIS_SCENARIOS[sector_name]
     else:
-        st.info("No sector scenarios generated results.")
+        # Default to general crisis scenarios if sector is unknown
+        return SECTOR_CRISIS_SCENARIOS["__default__"]
 
-with cB:
-    if not df_sys.empty:
-        figY = go.Figure()
-        figY.add_trace(go.Bar(x=df_sys["Scenario"], y=df_sys["PD"]))
-        figY.update_layout(title="Systemic Crisis", yaxis=dict(tickformat=".0%"), height=340)
-        st.plotly_chart(figY, use_container_width=True)
-    else:
-        st.info("No systemic scenarios generated results.")
+# -------------------------------------------------------------
+# Run stress test and apply dynamic factors to the model input
+sector_scenarios = build_sector_scenarios(sector_raw)
+
+# Scale the crisis multipliers based on selected severity and exchange intensity
+sector_scenarios_scaled = {scenario: scale_multiplier(factor, sev, ex_intensity) for scenario, factor in sector_scenarios.items()}
+
+# Run the scenario test and get PD values
+df_sector = run_scenarios(model, X_base_row, sector_scenarios_scaled)
+
+# Plot the sector scenario results
+if not df_sector.empty:
+    fig = go.Figure()
+    fig.add_trace(go.Bar(x=df_sector["Scenario"], y=df_sector["PD"]))
+    fig.update_layout(title=f"Sector Crisis Impact — {sector_raw}", yaxis=dict(tickformat=".0%"), height=340)
+    st.plotly_chart(fig, use_container_width=True)
+else:
+    st.info("No sector scenarios generated results.")
+    
 # ---------- Monte Carlo CVaR ----------
 st.markdown("**Monte Carlo CVaR 95%**")
 
