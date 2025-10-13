@@ -428,45 +428,99 @@ else:
 # ===================== D) Stress Testing (factor-level) =====================
 st.subheader("D. Stress Testing")
 
-# Reference for systemic & Monte Carlo
-reference = load_train_reference()
-if reference is None:
-    reference = feats_df.copy()
+# ===================== Stress Test (sector-specific) =====================
 
-# Align common features between X_base & reference
-common_cols = [c for c in X_base.columns if c in reference.columns]
-if not common_cols:
-    common_cols = list(X_base.columns)
-reference = reference[common_cols].copy()
-X_base_comm = X_base[common_cols].copy()
+# Define sector-specific scenarios (these can be customized further for other sectors)
+SECTOR_STRESS_SCENARIOS = {
+    "Steel": [
+        {"name": "Supply-Demand Shock", "shock": {"Revenue": -0.15, "ROA": -0.05}},
+        {"name": "Steel Price Drop", "shock": {"Revenue": -0.10, "ROE": -0.05}},
+        {"name": "Pandemic Shock", "shock": {"Revenue": -0.20, "EBITDA_to_Interest": -0.3}}
+    ],
+    "Real Estate": [
+        {"name": "Property Price Drop", "shock": {"Revenue": -0.15, "EBITDA_to_Interest": -0.2}},
+        {"name": "Credit Crunch", "shock": {"Debt_to_Assets": 0.2, "Interest_Coverage": -0.1}},
+        {"name": "Market Slowdown", "shock": {"Revenue": -0.10, "ROA": -0.15}}
+    ],
+    "Financials": [
+        {"name": "Credit Loss Surge", "shock": {"Debt_to_Equity": 0.15, "ROE": -0.1}},
+        {"name": "Interest Rate Shock", "shock": {"Interest_Coverage": -0.1, "Net_Profit_Margin": -0.05}},
+        {"name": "Liquidity Crisis", "shock": {"Current_Ratio": -0.2, "Quick_Ratio": -0.3}}
+    ],
+    "Energy": [
+        {"name": "Oil Price Drop", "shock": {"Revenue": -0.20, "EBITDA_to_Interest": -0.2}},
+        {"name": "Supply Disruption", "shock": {"ROA": -0.15, "Debt_to_Assets": 0.1}},
+        {"name": "Government Policy Change", "shock": {"Interest_Coverage": -0.1, "ROE": -0.05}}
+    ],
+    "__default__": [
+        {"name": "Sector Shock", "shock": {"ROA": -0.10, "EBITDA_to_Interest": -0.10}},
+        {"name": "Revenue Decline", "shock": {"Revenue": -0.05, "Net_Profit_Margin": -0.05}},
+        {"name": "Regulation Change", "shock": {"Current_Ratio": -0.15, "Quick_Ratio": -0.1}}
+    ]
+}
 
-# --- Sector Factor Scenarios (e.g., Steel) ---
-sector_factors = SECTOR_FACTORS.get(sector_norm_for_factors, SECTOR_FACTORS["__default__"])
+# Define systemic crisis scenarios
+SYSTEMIC_SCENARIOS = {
+    "Interest Rate +300bps": {
+        "Interest_Coverage": -0.2,
+        "EBITDA_to_Interest": -0.1,
+        "Debt_to_Equity": 0.15
+    },
+    "Government Tightening": {
+        "Current_Ratio": -0.15,
+        "Quick_Ratio": -0.10,
+        "ROA": -0.05
+    },
+    "Market Liquidity Crisis": {
+        "Interest_Coverage": -0.15,
+        "Revenue": -0.10,
+        "Net_Profit_Margin": -0.10
+    }
+}
+
+# Apply factors for Sector Stress Testing (this will modify the features of the company data)
+def apply_factor_map_once(Xrow: pd.DataFrame, factor: dict) -> pd.DataFrame:
+    X = Xrow.copy()
+    for f, mult in factor.items():
+        if f in X.columns:
+            X[f] = float(X[f].iloc[0]) * float(mult)
+    return X
+
+# Run the stress scenarios and return the PD (probability of default) for each factor scenario
+def run_factor_scenarios(model, Xrow_comm: pd.DataFrame, factors: dict) -> pd.DataFrame:
+    rows = []
+    for name, fmap in factors.items():
+        Xs = apply_factor_map_once(Xrow_comm, fmap)
+        Xs = align_features_to_model(Xs, model)
+        pd_val = float(model.predict_proba(Xs)[:,1][0]) if hasattr(model, "predict_proba") else float(model.predict(Xs)[0])
+        rows.append({"Scenario": name, "PD": pd_val})
+    return pd.DataFrame(rows)
+
+# ===================== Stress Test Calculation =====================
+
+# Sector Factor Scenarios (e.g., Steel, Real Estate, Financials, etc.)
+sector_factors = SECTOR_STRESS_SCENARIOS.get(sector_norm_for_factors, SECTOR_STRESS_SCENARIOS["__default__"])
+
+# Compute PD for Sector Crisis (for each factor)
 try:
     df_sector = run_factor_scenarios(model, X_base_comm, sector_factors)
 except Exception as e:
     st.error(f"Sector factors failed: {type(e).__name__} — {e}")
     df_sector = pd.DataFrame(columns=["Scenario", "PD"])
 
-# --- Systemic Factor Scenarios ---
+# Compute PD for Systemic Crisis
 try:
-    df_sys = run_factor_scenarios(model, X_base_comm, SYSTEMIC_FACTORS)
+    df_sys = run_factor_scenarios(model, X_base_comm, SYSTEMIC_SCENARIOS)
 except Exception as e:
     st.error(f"Systemic factors failed: {type(e).__name__} — {e}")
     df_sys = pd.DataFrame(columns=["Scenario", "PD"])
 
-# --- Monte Carlo CVaR 95% ---
-try:
-    mc = mc_cvar_pd(model, X_base_comm, reference_df=reference, sims=5000, alpha=0.95)
-    pd_var, pd_cvar = mc["VaR"], mc["CVaR"]
-except Exception as e:
-    st.error(f"Monte Carlo CVaR failed: {type(e).__name__} — {e}")
-    mc = {"PD_sims": np.array([])}; pd_var = pd_cvar = np.nan
+# ===================== Plotting Stress Test =====================
 
 # --- Charts: Sector vs Systemic (multi-bar each) ---
 cA, cB = st.columns(2)
 with cA:
-    title_sector = f"Sector Crisis — Steel" if sector_norm_for_factors == "Steel" else "Sector Crisis"
+    title_sector = f"Sector Crisis — {sector_norm_for_factors}" if sector_norm_for_factors else "Sector Crisis"
     if not df_sector.empty:
         figS = go.Figure()
         figS.add_trace(go.Bar(x=df_sector["Scenario"], y=df_sector["PD"]))
@@ -484,8 +538,8 @@ with cB:
     else:
         st.info("No systemic factor PDs.")
 
-# --- Bottom row: Monte Carlo histogram + metrics ---
-b1, b2 = st.columns([2, 1])
+# --- Monte Carlo CVaR distribution ---
+b1, b2 = st.columns([2,1])
 with b1:
     st.markdown("**Monte Carlo CVaR 95%**")
     if isinstance(mc.get("PD_sims"), np.ndarray) and mc["PD_sims"].size:
