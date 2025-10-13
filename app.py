@@ -89,7 +89,11 @@ def load_train_reference():
     return None
 
 def compute_feature_stats(df: pd.DataFrame, features: list) -> pd.DataFrame:
-    sub = df[features].replace([np.inf, -np.inf], np.nan)
+    # chỉ giữ những feature có thật trong df để tránh KeyError
+    valid_feats = [f for f in features if f in df.columns]
+    if not valid_feats:
+        return pd.DataFrame(columns=["mean", "std"])
+    sub = df[valid_feats].replace([np.inf, -np.inf], np.nan)
     stats = pd.DataFrame({"mean": sub.mean(skipna=True), "std": sub.std(ddof=0, skipna=True)})
     stats["std"] = stats["std"].replace(0, np.nan)
     return stats
