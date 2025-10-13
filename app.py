@@ -446,14 +446,14 @@ try:
     df_sector = run_factor_scenarios(model, X_base_comm, sector_factors)
 except Exception as e:
     st.error(f"Sector factors failed: {type(e).__name__} — {e}")
-    df_sector = pd.DataFrame(columns=["Scenario","PD"])
+    df_sector = pd.DataFrame(columns=["Scenario", "PD"])
 
 # --- Systemic Factor Scenarios ---
 try:
     df_sys = run_factor_scenarios(model, X_base_comm, SYSTEMIC_FACTORS)
 except Exception as e:
     st.error(f"Systemic factors failed: {type(e).__name__} — {e}")
-    df_sys = pd.DataFrame(columns=["Scenario","PD"])
+    df_sys = pd.DataFrame(columns=["Scenario", "PD"])
 
 # --- Monte Carlo CVaR 95% ---
 try:
@@ -485,12 +485,12 @@ with cB:
         st.info("No systemic factor PDs.")
 
 # --- Bottom row: Monte Carlo histogram + metrics ---
-b1, b2 = st.columns([2,1])
+b1, b2 = st.columns([2, 1])
 with b1:
     st.markdown("**Monte Carlo CVaR 95%**")
     if isinstance(mc.get("PD_sims"), np.ndarray) and mc["PD_sims"].size:
         hist = np.histogram(mc["PD_sims"], bins=40)
-        centers = (hist[1][1:]+hist[1][:-1])/2
+        centers = (hist[1][1:] + hist[1][:-1]) / 2
         figC = go.Figure()
         figC.add_trace(go.Bar(x=centers, y=hist[0]))
         figC.add_vline(x=pd_var, line_width=2, line_dash="dash", line_color="red")
