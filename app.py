@@ -1,14 +1,3 @@
-# app.py — Corporate Default Risk Scoring (Bank-grade, single page)
-# ---------------------------------------------------------------
-# Requirements (already in your repo):
-# streamlit, pandas, numpy, plotly, lightgbm, scikit-learn, shap (optional)
-# Artifacts:
-#   - models/lgbm_model.pkl
-#   - models/threshold.json
-#   - (optional but recommended) models/train_reference.parquet | .csv
-# Data:
-#   - bctc_final.csv  (raw, not uploaded by user at runtime)
-
 import os
 import json
 import numpy as np
@@ -175,14 +164,48 @@ def mc_cvar_pd(model, Xrow: pd.DataFrame, reference_df: pd.DataFrame,
     return {"PD_sims": pd_sims, "VaR": var, "CVaR": cvar}
 
 # ===================== Load data & artifacts =====================
+DATA_PATH = "bctc_final.csv"
+
 @st.cache_data(show_spinner=False)
-def load_dataset():
-    if not os.path.exists("bctc_final.csv"):
-        raise FileNotFoundError("bctc_final.csv not found in repository.")
-    raw = pd.read_csv("bctc_final.csv")
-    cleaned = clean_and_log_transform(raw)
-    feats = preprocess_and_create_features(cleaned)
-    return feats
+def load_dataset(path: str):
+    if not os.path.exists(path):
+        st.error(f"❌ Dataset not found at `{path}`. Please make sure the file is in the project root.")
+        st.stop()
+
+    try:
+        # Thử đọc với UTF-8-SIG (phù hợp cho file có tiếng Việt)
+        df = pd.read_csv(path, encoding="utf-8-sig")
+    except Exception as e_utf:
+        try:
+            # Thử lại với latin1 (phòng trường hợp encoding lạ)
+            df = pd.read_csv(path, encoding="latin1")
+        except Exception as e_lat:
+            st.error(f"❌ Failed to read dataset. UTF-8 error: {e_utf}\nLatin1 error: {e_lat}")
+            st.stop()
+
+    # Kiểm tra cột
+    if df.shape[1] == 0 or df.columns.str.strip().tolist() == []:
+        st.error("❌ Dataset error: No columns detected. Please check that the file has a header row.")
+        st.stop()
+
+    # Kiểm tra một số cột quan trọng
+    required_cols = ['Ticker', 'Year', 'Sector', 'Exchange']
+    missing_cols = [c for c in required_cols if c not in df.columns]
+    if missing_cols:
+        st.error(f"❌ Missing required columns in dataset: {', '.join(missing_cols)}")
+        st.stop()
+
+    # Làm sạch nhẹ tên cột (bỏ khoảng trắng 2 đầu)
+    df.columns = df.columns.str.strip()
+
+    # Bỏ các dòng trống hoàn toàn
+    df.dropna(how="all", inplace=True)
+
+    if df.empty:
+        st.error("❌ Dataset is empty after cleaning. Please check the CSV file content.")
+        st.stop()
+
+    return df
 
 @st.cache_resource(show_spinner=False)
 def load_artifacts():
