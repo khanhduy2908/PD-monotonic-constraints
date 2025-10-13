@@ -374,18 +374,22 @@ else:
 # ===================== D) Stress Testing (Factor-level, sector & systemic) =====================
 st.subheader("D. Stress Testing")
 
-# Ensure sector_raw is valid and not empty
+# Check if sector_raw is valid and not empty
 if not sector_raw or pd.isna(sector_raw.strip()):
     sector_raw = "__default__"  # Default value for invalid or empty sector
 
-# Log the sector_raw value for debugging
-print(f"Processing sector: {sector_raw}")
+# Debugging: log the sector_raw value
+st.write(f"Sector raw: {sector_raw}")  # Display sector for debugging purposes
 
-# Run sector and systemic scenarios based on the sector_raw
-sector_scenarios_raw = build_sector_scenarios(sector_raw)
-systemic_scenarios_raw = SYSTEMIC_FACTORS
+# Proceed to run sector and systemic scenarios based on sector_raw
+try:
+    sector_scenarios_raw = build_sector_scenarios(sector_raw)
+    systemic_scenarios_raw = SYSTEMIC_FACTORS
+except Exception as e:
+    st.error(f"Error building scenarios: {e}")
+    st.stop()
 
-# Scale the scenarios using the severity and exchange intensity
+# Scale the scenarios using severity and exchange intensity
 sector_scenarios = {name: scale_multiplier(m, sev, exch_intensity) for name, m in sector_scenarios_raw.items()}
 systemic_scenarios = {name: scale_multiplier(m, sev, exch_intensity) for name, m in systemic_scenarios_raw.items()}
 
