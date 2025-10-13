@@ -560,9 +560,14 @@ SYSTEMIC_BLOCKS = {
 
 # ---------- Sector → Scenario Routing ----------
 def build_sector_scenarios(sector_name: str) -> dict:
-    key = _sector_key(sector_name)
+    # Check if sector_name is empty or None and assign a fallback default value
+    if not sector_name:
+        sector_name = "__default__"  # Default fallback for unknown sectors
+    
+    key = _sector_key(sector_name)  # Now it will always have a valid sector name
     sc = {}
 
+    # Sector-specific mappings for different sectors
     if key == "Banks":
         sc = {
             "Credit Loss Surge": SCENARIO_BLOCKS["Pandemic/Demand Shock"],
