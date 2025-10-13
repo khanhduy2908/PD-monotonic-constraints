@@ -425,7 +425,7 @@ pd_floor = float(ovr.get("pd_floor", PD_CFG["pd_floor"].get(exchange, PD_CFG["pd
 pd_cap = PD_CFG["pd_cap"]["default"]
 pd_final = float(np.clip(_sigmoid(logit0 + adj), pd_floor, pd_cap))
 
-# 9) Thresholds & phân loại band (Low / Medium / High) — KHÔNG dùng _classify_band cũ
+# 9) Thresholds & phân loại band (Low / Medium / High)
 thr = thresholds_for_sector(load_thresholds("models/threshold.json"), sector_raw)
 
 def policy_band(pd_val: float, thr_dict: dict) -> str:
