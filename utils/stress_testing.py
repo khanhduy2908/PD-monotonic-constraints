@@ -2,6 +2,20 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+def align_features_to_model(X_df: pd.DataFrame, model):
+    """Ensure X_df has the exact same columns (and order) as the model was trained on."""
+    model_features = model.feature_name_
+
+    # Tạo DataFrame mới với đầy đủ các cột của mô hình, điền 0 cho cột thiếu
+    for col in model_features:
+        if col not in X_df.columns:
+            X_df[col] = 0
+
+    # Loại bỏ các cột thừa không có trong model
+    X_df = X_df[model_features]
+
+    return X_df
+
 # ---------- Sector mapping ----------
 def detect_sector_alias(sector_raw: str) -> str:
     s = (sector_raw or "").lower()
