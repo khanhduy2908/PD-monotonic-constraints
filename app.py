@@ -161,7 +161,6 @@ def load_artifacts():
 
 # ---------- Header ----------
 st.title("Corporate Default Risk Scoring")
-st.caption("English UI • Single page • LightGBM scoring • SHAP explainability • Sector vs Systemic stress • Monte Carlo CVaR • Bank-grade UI")
 
 # ---------- Data init ----------
 try:
